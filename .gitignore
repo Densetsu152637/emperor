@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+# Training outputs and data live on the Hugging Face Hub, not in Git.
+/outputs/
+/checkpoints/
+/data/cache/
+*.gguf
+*.safetensors
