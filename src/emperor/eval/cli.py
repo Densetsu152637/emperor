@@ -14,10 +14,12 @@ METRICS = {
     "routing": "G2",
     "brief": "G4",
     "leakage": "G5",
+    "plan": "G10",
+    "clarify": "G11",
 }
 # Suite name -> plan goal it verifies.
 SUITES = {
-    "heldout": "G1, G2, G4, G5",
+    "heldout": "G1, G2, G4, G5, G10, G11",
     "e2e": "G3",
     "longctx": "G6",
 }
