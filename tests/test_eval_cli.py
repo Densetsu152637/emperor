@@ -25,5 +25,12 @@ def test_dry_run_limits_metrics(capsys):
     assert list(json.loads(capsys.readouterr().out)["metrics"]) == ["leakage"]
 
 
+def test_dry_run_records_context_tier(capsys):
+    assert main(["--dry-run", "--context-tier", "256k"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["context_tier"] == "256k"
+    assert report["context_tokens"] == 262_144
+
+
 def test_real_run_is_refused_until_implemented():
     assert main([]) == 2
