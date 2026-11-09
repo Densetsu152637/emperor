@@ -1,0 +1,26 @@
+{
+  "id": "plan-faster-web-app",
+  "description": "Vague one-line request: a measurable goal, measure-before-optimise dependencies, and stated assumptions (G10).",
+  "prompt": "Make our web app faster.",
+  "expect": {
+    "plan": {
+      "stages_any": [["measure", "baseline", "profile"], ["optimi", "fix", "speed up"], ["verify", "compare", "re-measure"]],
+      "dependencies": [[["measure", "baseline"], ["optimi", "fix", "speed up"]], [["optimi", "fix", "speed up"], ["verify", "compare", "re-measure"]]],
+      "assumptions_min": 2
+    }
+  },
+  "reference": [
+    {"tool_calls": [{"name": "update_plan", "arguments": {
+      "goal": "Cut p95 page load on the three busiest pages to under 2 s, measured with Lighthouse and server timings before and after.",
+      "steps": [
+        {"title": "Measure baseline", "status": "in_progress", "owner": "subagent, standard", "acceptance": "Lighthouse scores and p95 server timings recorded for the three busiest pages"},
+        {"title": "Profile hot paths", "status": "pending", "depends_on": ["Measure baseline"], "owner": "subagent, standard", "acceptance": "Top five bottlenecks ranked by time saved"},
+        {"title": "Optimise top bottlenecks", "status": "pending", "depends_on": ["Profile hot paths"], "owner": "subagents, standard, one per bottleneck", "acceptance": "Each change merged with tests passing"},
+        {"title": "Verify against baseline", "status": "pending", "depends_on": ["Optimise top bottlenecks"], "owner": "subagent, basic", "acceptance": "p95 under 2 s on all three pages"}
+      ],
+      "assumptions": ["Faster means page load as users see it, not throughput", "The three busiest pages are the ones that matter; found from the access logs"],
+      "open_questions": []
+    }}]},
+    {"content": "Plan: measure a baseline on the three busiest pages, profile, fix the top bottlenecks in parallel, then verify p95 is under 2 s. I assumed you mean user-visible page load; say if you meant throughput. Starting the baseline now."}
+  ]
+}

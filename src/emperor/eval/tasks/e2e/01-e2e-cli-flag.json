@@ -1,0 +1,23 @@
+{
+  "id": "e2e-cli-flag",
+  "description": "End to end: add a CLI flag with tests in a scratch repo. With real subagents the success check runs against their work; the recorded reply makes dry runs free (G3).",
+  "class": "menial",
+  "prompt": "In the scratch repo ~/eval/wordcount, add a --lines flag to the wc.py CLI that counts lines instead of words, with tests. pytest must pass.",
+  "expect": {
+    "routing": {"mode": "spawn", "subagents": [1, 2], "tier": ["basic", "standard"], "tags_any": ["tests", "refactor", "code"]},
+    "brief": {"must_mention": ["--lines", "wc.py", "pytest"]},
+    "success": {"final_contains_all": ["--lines", "passed"], "awaited_all": true}
+  },
+  "replies": [
+    {"report": "Added --lines to wc.py (argparse flag; counts newline-separated lines) and tests/test_lines.py with 4 tests. pytest: 11 passed."}
+  ],
+  "reference": [
+    {"tool_calls": [{"name": "spawn_agent", "arguments": {
+      "brief": "## Goal\nAdd a --lines flag to the wc.py CLI in ~/eval/wordcount that counts lines instead of words.\n\n## Context\nwc.py uses argparse; tests live in tests/ and run with pytest from the repo root.\n\n## Constraints\nKeep the default (word count) behaviour unchanged.\n\n## Acceptance\n- `python wc.py --lines FILE` prints the line count.\n- New tests cover --lines, including an empty file; pytest passes.\n\n## Output format\nChanged files, the new tests, and the pytest summary line.",
+      "tier": "standard",
+      "tags": ["code", "tests"]
+    }}]},
+    {"tool_calls": [{"name": "await_tasks", "arguments": {}}]},
+    {"content": "Added --lines to wc.py with 4 new tests in tests/test_lines.py; pytest: 11 passed."}
+  ]
+}

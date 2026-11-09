@@ -1,0 +1,23 @@
+{
+  "id": "refactor-rename",
+  "description": "Menial refactor: one local subagent, basic or standard tier, refactor tag (G2, G15).",
+  "class": "menial",
+  "prompt": "In my repo at ~/code/inventory, rename the function load_items to read_inventory everywhere under src/, and keep the tests passing (pytest from the repo root).",
+  "expect": {
+    "routing": {"mode": "spawn", "subagents": 1, "tier": ["basic", "standard"], "tags_any": ["refactor"], "single_call": false},
+    "brief": {"must_mention": ["load_items", "read_inventory", "src/", "pytest"]},
+    "success": {"final_contains_any": ["read_inventory"], "awaited_all": true}
+  },
+  "replies": [
+    {"match": ["read_inventory"], "report": "Renamed load_items to read_inventory in 6 files under src/ and in 2 test files. pytest from the repo root: 48 passed."}
+  ],
+  "reference": [
+    {"tool_calls": [{"name": "spawn_agent", "arguments": {
+      "brief": "## Goal\nRename the function load_items to read_inventory everywhere under src/ in ~/code/inventory, keeping behaviour unchanged.\n\n## Context\nRepository: ~/code/inventory (Python). Tests run with pytest from the repo root.\n\n## Constraints\nChange only the name, its call sites and imports; no other edits.\n\n## Acceptance\n- No occurrence of load_items remains under src/ or tests/.\n- pytest from the repo root passes.\n\n## Output format\nThe changed files and the pytest summary line.",
+      "tier": "standard",
+      "tags": ["refactor"]
+    }}]},
+    {"tool_calls": [{"name": "await_tasks", "arguments": {}}]},
+    {"content": "Done: load_items is now read_inventory in 6 source files and 2 test files, and pytest reports 48 passed."}
+  ]
+}

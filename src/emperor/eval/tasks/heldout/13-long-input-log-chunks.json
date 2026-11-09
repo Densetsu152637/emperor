@@ -1,0 +1,26 @@
+{
+  "id": "long-input-log-chunks",
+  "description": "A 300K-token input arrives as an artefact handle: split it with delegate_chunks and reduce, never read it inline (stage 2a, G2, G12).",
+  "prompt": "Last night's production log is stored as artefact art_7f3a (about 300K tokens; outline: 6 services, 02:00-06:00 UTC, one line per event). Find every burst of errors and its likely cause.",
+  "expect": {
+    "routing": {"mode": "chunks"},
+    "brief": {"must_mention": ["error", "burst"]},
+    "success": {"final_contains_all": ["payments", "02:14", "search"], "awaited_all": true}
+  },
+  "replies": [
+    {"tool": "delegate_chunks", "report": "Chunk 1 (02:00-03:20): one burst, payments, 02:14-02:19, 412 errors 'connection pool exhausted'; likely cause: pool size 10 under the 02:10 batch job."},
+    {"tool": "delegate_chunks", "report": "Chunk 2 (03:20-04:40): no bursts; isolated 5xx below 0.1 %."},
+    {"tool": "delegate_chunks", "report": "Chunk 3 (04:40-06:00): one burst, search, 05:31-05:33, 88 timeouts after a deploy at 05:30; likely cause: cold index cache."},
+    {"tool": "delegate_chunks", "report": "Merged: two bursts. payments 02:14-02:19 (connection pool exhausted by the 02:10 batch job); search 05:31-05:33 (timeouts from a cold cache after the 05:30 deploy)."}
+  ],
+  "reference": [
+    {"tool_calls": [{"name": "delegate_chunks", "arguments": {
+      "artefact_id": "art_7f3a",
+      "chunk_tokens": 40000,
+      "brief": "## Goal\nFind every burst of errors in your chunk of a production log and its likely cause.\n\n## Context\nThe log covers 6 services from 02:00 to 06:00 UTC, one line per event. A burst is at least 20 errors from one service within 5 minutes.\n\n## Constraints\nReport only what the chunk shows; mark guesses as likely.\n\n## Acceptance\n- Every burst listed with service, start and end time, error count and a sample message.\n\n## Output format\nOne line per burst: service, time range, count, sample message, likely cause. Say 'no bursts' if none.",
+      "reduce": "Merge the chunk reports into one list of bursts, joining bursts split across chunk boundaries, ordered by time."
+    }}]},
+    {"tool_calls": [{"name": "await_tasks", "arguments": {}}]},
+    {"content": "Two error bursts last night:\n1. payments, 02:14-02:19 UTC, 412 'connection pool exhausted' errors; likely the 02:10 batch job exhausting a pool of 10.\n2. search, 05:31-05:33 UTC, 88 timeouts right after the 05:30 deploy; likely a cold index cache.\nNothing else rose above background noise."}
+  ]
+}

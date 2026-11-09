@@ -1,0 +1,23 @@
+{
+  "id": "research-http-clients",
+  "description": "Independent research in parallel: one to three standard subagents, merged into one table (G2, G3 proxy).",
+  "prompt": "Compare the licence, latest release date and maintainer activity of three Python HTTP clients: requests, httpx and aiohttp. I want a table.",
+  "expect": {
+    "routing": {"mode": "spawn", "subagents": [1, 3], "tier": ["standard"]},
+    "success": {"final_contains_all": ["requests", "httpx", "aiohttp", "Apache-2.0", "BSD-3-Clause"], "awaited_all": true}
+  },
+  "replies": [
+    {"match": ["httpx"], "report": "httpx: BSD-3-Clause; latest release 0.28.1 (2024-12-06); 3 active maintainers, issues triaged weekly. Sources: https://pypi.org/project/httpx/"},
+    {"match": ["aiohttp"], "report": "aiohttp: Apache-2.0; latest release 3.12.15 (2025-07-29); very active, several releases a month. Sources: https://pypi.org/project/aiohttp/"},
+    {"match": ["requests"], "report": "requests: Apache-2.0; latest release 2.32.5 (2025-08-18); maintenance mode, few maintainers. Sources: https://pypi.org/project/requests/"}
+  ],
+  "reference": [
+    {"tool_calls": [
+      {"name": "spawn_agent", "arguments": {"brief": "## Goal\nReport the licence, latest release (version and date) and maintainer activity of the Python HTTP client requests.\n\n## Context\nPart of a comparison table; use PyPI and the project's repository.\n\n## Constraints\nPublic sources only; cite every URL.\n\n## Acceptance\n- Licence identifier, latest version with date, and a one-line activity summary, each with a source URL.\n\n## Output format\nOne line per field, then the source URLs.", "tier": "standard", "tags": ["research"]}},
+      {"name": "spawn_agent", "arguments": {"brief": "## Goal\nReport the licence, latest release (version and date) and maintainer activity of the Python HTTP client httpx.\n\n## Context\nPart of a comparison table; use PyPI and the project's repository.\n\n## Constraints\nPublic sources only; cite every URL.\n\n## Acceptance\n- Licence identifier, latest version with date, and a one-line activity summary, each with a source URL.\n\n## Output format\nOne line per field, then the source URLs.", "tier": "standard", "tags": ["research"]}},
+      {"name": "spawn_agent", "arguments": {"brief": "## Goal\nReport the licence, latest release (version and date) and maintainer activity of the Python HTTP client aiohttp.\n\n## Context\nPart of a comparison table; use PyPI and the project's repository.\n\n## Constraints\nPublic sources only; cite every URL.\n\n## Acceptance\n- Licence identifier, latest version with date, and a one-line activity summary, each with a source URL.\n\n## Output format\nOne line per field, then the source URLs.", "tier": "standard", "tags": ["research"]}}
+    ]},
+    {"tool_calls": [{"name": "await_tasks", "arguments": {}}]},
+    {"content": "| Client | Licence | Latest release | Activity |\n| --- | --- | --- | --- |\n| requests | Apache-2.0 | 2.32.5 (2025-08-18) | maintenance mode |\n| httpx | BSD-3-Clause | 0.28.1 (2024-12-06) | active, weekly triage |\n| aiohttp | Apache-2.0 | 3.12.15 (2025-07-29) | very active |\n\nSources: https://pypi.org/project/requests/, https://pypi.org/project/httpx/, https://pypi.org/project/aiohttp/"}
+  ]
+}

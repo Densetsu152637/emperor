@@ -1,0 +1,17 @@
+{
+  "id": "needles-full-tier",
+  "description": "RULER-style retrieval at the tier's full length: three needles at 10, 50 and 90 % depth (G6).",
+  "tools": [],
+  "haystack": {
+    "tokens": "tier",
+    "needles": [
+      {"key": "vault number of the salt ledger", "value": "8836", "depth": 0.1},
+      {"key": "password of the river gate watch", "value": "heron-lantern", "depth": 0.5},
+      {"key": "ship that carried the winter grain", "value": "Aurelia Vento", "depth": 0.9}
+    ],
+    "question": "From the document above only: what is the vault number of the salt ledger, the password of the river gate watch, and the ship that carried the winter grain?"
+  },
+  "reference": [
+    {"content": "The salt ledger is in vault 8836, the river gate watch uses heron-lantern, and the winter grain came on the Aurelia Vento."}
+  ]
+}

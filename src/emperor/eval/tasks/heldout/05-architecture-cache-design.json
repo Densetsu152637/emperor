@@ -1,0 +1,24 @@
+{
+  "id": "architecture-cache-design",
+  "description": "Hard architecture: one frontier subagent, architecture or design tag, single call, brief inlines the numbers (G2, G4, G15).",
+  "class": "hard",
+  "prompt": "Our Postgres-backed API serves about 2k requests/s with p99 latency 120 ms. Reads outnumber writes 20:1 and most data is per-user. Design a caching layer that gets p99 under 40 ms without serving stale balances.",
+  "expect": {
+    "routing": {"mode": "spawn", "subagents": 1, "tier": "frontier", "tags_any": ["architecture", "design"], "single_call": true},
+    "brief": {"must_mention": ["Postgres", "2k", "20:1", "40 ms", "balances"]},
+    "success": {"final_contains_any": ["cache"], "awaited_all": true}
+  },
+  "replies": [
+    {"report": "Design: per-user read-through cache in Redis keyed by user id, write-through invalidation on balance writes inside the same transaction outbox, balances never cached beyond the outbox lag; expected p99 25-35 ms ..."}
+  ],
+  "reference": [
+    {"tool_calls": [{"name": "spawn_agent", "arguments": {
+      "brief": "## Goal\nDesign a caching layer for a Postgres-backed API that brings p99 latency from 120 ms to under 40 ms without ever serving stale balances.\n\n## Context\nLoad: about 2k requests/s; reads outnumber writes 20:1; most data is per-user. Balances must be read-your-writes consistent. Everything else may be up to a few seconds stale (assumption).\n\n## Constraints\nAnswer in one reply; no tools. Keep Postgres as the source of truth.\n\n## Acceptance\n- A design with cache placement, keys, invalidation, and failure behaviour.\n- An argument that balances are never stale, and a latency estimate under 40 ms.\n\n## Output format\nA one-paragraph summary, then sections: components, data flow, invalidation, failure modes, expected latency.",
+      "tier": "frontier",
+      "tags": ["architecture", "design"],
+      "single_call": true
+    }}]},
+    {"tool_calls": [{"name": "await_tasks", "arguments": {}}]},
+    {"content": "Recommended design: a per-user read-through cache in Redis with write-through invalidation of balances via a transactional outbox, so balances are never stale; the estimate is p99 25-35 ms. Details follow from the design report ..."}
+  ]
+}
