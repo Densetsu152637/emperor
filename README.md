@@ -7,7 +7,8 @@ Imperium's `spawn_agent` and `await_tasks` tools.
 
 > **Status:** stage 2b (eval harness). The plan of record is
 > [`docs/plans/emperor.md`](https://github.com/Densetsu152637/Imperium-AI/blob/docs/dispatcher-model-plan/docs/plans/emperor.md)
-> in the Imperium repository.
+> in the Imperium repository. The step-by-step procedure from baselines to publication is
+> [`docs/runbook.md`](docs/runbook.md).
 
 ## Layout
 
