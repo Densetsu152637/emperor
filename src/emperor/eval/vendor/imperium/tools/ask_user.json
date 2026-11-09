@@ -1,0 +1,40 @@
+{
+  "description": "Ask the user one batch of questions about decisions that are theirs to make or that cannot be researched. Give each question a recommended answer, and options when the choices are few. Keep working on whatever does not depend on the answers.",
+  "name": "ask_user",
+  "parameters": {
+    "properties": {
+      "questions": {
+        "items": {
+          "properties": {
+            "options": {
+              "description": "The choices, when there are only a few",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "question": {
+              "type": "string"
+            },
+            "recommended": {
+              "description": "The answer you suggest, and why in a few words",
+              "type": "string"
+            }
+          },
+          "required": [
+            "question",
+            "recommended"
+          ],
+          "type": "object"
+        },
+        "minItems": 1,
+        "type": "array"
+      }
+    },
+    "required": [
+      "questions"
+    ],
+    "type": "object"
+  },
+  "status": "planned"
+}

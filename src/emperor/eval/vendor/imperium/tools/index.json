@@ -1,0 +1,32 @@
+{
+  "tools": [
+    {
+      "name": "spawn_agent",
+      "status": "available"
+    },
+    {
+      "name": "await_tasks",
+      "status": "available"
+    },
+    {
+      "name": "update_plan",
+      "status": "available"
+    },
+    {
+      "name": "web_search",
+      "status": "available"
+    },
+    {
+      "name": "web_fetch",
+      "status": "available"
+    },
+    {
+      "name": "delegate_chunks",
+      "status": "planned"
+    },
+    {
+      "name": "ask_user",
+      "status": "planned"
+    }
+  ]
+}
