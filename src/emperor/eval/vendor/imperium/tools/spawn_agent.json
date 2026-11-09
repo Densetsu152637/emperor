@@ -1,0 +1,49 @@
+{
+  "description": "Delegate an independent task to a subagent that runs in parallel. The brief must be self-contained. Returns a task id; collect the report with await_tasks.",
+  "name": "spawn_agent",
+  "parameters": {
+    "properties": {
+      "brief": {
+        "type": "string"
+      },
+      "location": {
+        "description": "Restrict to models on this machine or at hosted providers",
+        "enum": [
+          "local",
+          "cloud"
+        ],
+        "type": "string"
+      },
+      "model": {
+        "description": "A model table id (or <endpoint>:<model>) to use",
+        "type": "string"
+      },
+      "single_call": {
+        "description": "The subagent gets the brief and no tools, answers in exactly one model call, and its reply is the report. Use for hard, self-contained questions; put everything it needs in the brief. Default false.",
+        "type": "boolean"
+      },
+      "tags": {
+        "description": "Labels such as code or vision that delegation rules match. Task classes route by default: refactor, tests, ui, format, docs prefer small local models; architecture, math, proof, algorithm, design prefer cloud frontier models.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "tier": {
+        "description": "Minimum model capability; the cheapest suitable model is chosen. Default standard.",
+        "enum": [
+          "basic",
+          "standard",
+          "strong",
+          "frontier"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "brief"
+    ],
+    "type": "object"
+  },
+  "status": "available"
+}

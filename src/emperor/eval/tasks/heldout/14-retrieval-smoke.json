@@ -1,0 +1,16 @@
+{
+  "id": "retrieval-smoke",
+  "description": "A short needle-in-a-haystack check; the longctx suite runs the same test at the tier's full length (G6).",
+  "tools": [],
+  "haystack": {
+    "tokens": 4096,
+    "needles": [
+      {"key": "code for the blue door", "value": "4721", "depth": 0.3},
+      {"key": "name of the night courier", "value": "Varro", "depth": 0.8}
+    ],
+    "question": "From the document above only: what is the code for the blue door, and what is the name of the night courier?"
+  },
+  "reference": [
+    {"content": "The code for the blue door is 4721, and the night courier is Varro."}
+  ]
+}

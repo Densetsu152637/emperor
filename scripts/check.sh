@@ -8,3 +8,4 @@ uv run ruff check .
 uv run ruff format --check .
 uv run pytest -q
 uv run eval --help > /dev/null
+uv run eval --model llamacpp:emperor --dry-run > /dev/null

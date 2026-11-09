@@ -1,0 +1,24 @@
+{
+  "id": "math-merge-sort-bound",
+  "description": "Hard maths: one frontier subagent, math or proof tag, single call (G2, G15).",
+  "class": "hard",
+  "prompt": "I need a tight upper bound on the number of comparisons merge sort makes on n elements, with a proof I can put in my thesis.",
+  "expect": {
+    "routing": {"mode": "spawn", "subagents": 1, "tier": "frontier", "tags_any": ["math", "proof"], "single_call": true},
+    "brief": {"must_mention": ["merge sort", "comparisons", "proof"]},
+    "success": {"final_contains_any": ["log2 n", "log n"], "awaited_all": true}
+  },
+  "replies": [
+    {"report": "Bound: C(n) <= n*ceil(log2 n) - 2^ceil(log2 n) + 1, tight for every n. Proof by strong induction on n: a merge of sizes a and b uses at most a+b-1 comparisons, and the recurrence C(n) = C(ceil(n/2)) + C(floor(n/2)) + n - 1 solves to the bound (full proof follows) ..."}
+  ],
+  "reference": [
+    {"tool_calls": [{"name": "spawn_agent", "arguments": {
+      "brief": "## Goal\nGive the tight worst-case upper bound on the number of comparisons top-down merge sort makes on n elements, with a rigorous proof suitable for a thesis.\n\n## Context\nStandard top-down merge sort splitting into ceil(n/2) and floor(n/2); a merge of sizes a and b uses at most a+b-1 comparisons.\n\n## Constraints\nAnswer in one reply; no tools. Exact bound, not just big-O.\n\n## Acceptance\n- A closed-form bound valid for every n >= 1, shown tight.\n- A complete proof (induction on n) with every step justified.\n\n## Output format\nThe bound on one line, then the proof in LaTeX-friendly prose.",
+      "tier": "frontier",
+      "tags": ["math", "proof"],
+      "single_call": true
+    }}]},
+    {"tool_calls": [{"name": "await_tasks", "arguments": {}}]},
+    {"content": "Merge sort makes at most n*ceil(log2 n) - 2^ceil(log2 n) + 1 comparisons, and this is tight. Proof: by strong induction on n using C(n) = C(ceil(n/2)) + C(floor(n/2)) + n - 1 ..."}
+  ]
+}

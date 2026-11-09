@@ -1,0 +1,12 @@
+{
+  "id": "answer-http-418",
+  "description": "A quick factual question: the root answers itself without delegating (G2).",
+  "prompt": "Quick one: what does HTTP status code 418 mean?",
+  "expect": {
+    "routing": {"mode": "answer"},
+    "success": {"final_contains_any": ["teapot"]}
+  },
+  "reference": [
+    {"content": "418 is \"I'm a teapot\": an April Fools' status from RFC 2324. Some servers return it to refuse a request jokingly; it has no standard use."}
+  ]
+}

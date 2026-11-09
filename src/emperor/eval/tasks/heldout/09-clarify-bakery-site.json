@@ -1,0 +1,46 @@
+{
+  "id": "clarify-bakery-site",
+  "description": "Labelled gaps: ask the user's decisions in one batch, assume the rest, keep working (G11, G10).",
+  "prompt": "Build me a website for my bakery.",
+  "expect": {
+    "gaps": [
+      {"id": "domain", "kind": "user_decision", "keywords": ["domain"]},
+      {"id": "budget", "kind": "user_decision", "keywords": ["budget", "spend"]},
+      {"id": "ordering", "kind": "user_decision", "keywords": ["order"]},
+      {"id": "generator", "kind": "safe_default", "keywords": ["generator", "framework", "astro", "hugo"]},
+      {"id": "hosting", "kind": "safe_default", "keywords": ["hosting", "host"]}
+    ],
+    "plan": {
+      "stages_any": [["content", "copy"], ["design", "layout"], ["build", "site"], ["deploy", "publish"]],
+      "dependencies": [[["content", "copy"], ["build"]], [["build"], ["deploy", "publish"]]],
+      "assumptions_min": 2
+    },
+    "brief": {"must_mention": ["bakery"]}
+  },
+  "replies": [
+    {"report": "Drafted a warm, mobile-first layout: hero photo, menu, opening hours, location map, contact. Palette: cream, rye brown, berry accent. Wireframes at design/wireframes.md."}
+  ],
+  "reference": [
+    {"tool_calls": [{"name": "update_plan", "arguments": {
+      "goal": "A fast, mobile-friendly bakery website with menu, hours, location and contact, live on the web and scoring at least 90 on Lighthouse.",
+      "steps": [
+        {"title": "Draft content and copy", "status": "in_progress", "owner": "subagent, standard", "acceptance": "Menu, hours, story and contact text drafted"},
+        {"title": "Design the layout", "status": "in_progress", "owner": "subagent, standard", "acceptance": "Mobile-first wireframes and a palette"},
+        {"title": "Build the site", "status": "pending", "depends_on": ["Draft content and copy", "Design the layout"], "owner": "subagent, standard", "acceptance": "Site builds and passes Lighthouse >= 90"},
+        {"title": "Deploy and publish", "status": "pending", "depends_on": ["Build the site"], "owner": "subagent, basic", "acceptance": "Site reachable at the chosen domain over HTTPS"}
+      ],
+      "assumptions": ["Static site generator: Astro, simple and fast", "Hosting: a free static host such as Netlify"],
+      "open_questions": ["Which domain should the site use?", "What monthly budget is acceptable?", "Should customers be able to order online?"]
+    }}]},
+    {"tool_calls": [
+      {"name": "ask_user", "arguments": {"questions": [
+        {"question": "Which domain name should the site use, and do you own it already?", "recommended": "Your bakery's name with .com, if free"},
+        {"question": "What monthly budget is acceptable for running the site?", "options": ["Free", "Under $10", "Under $50"], "recommended": "Under $10: a domain plus free static hosting"},
+        {"question": "Should customers be able to order online?", "options": ["No, show the menu only", "Pre-orders for pickup", "Full delivery"], "recommended": "No for launch; add pre-orders later"}
+      ]}},
+      {"name": "spawn_agent", "arguments": {"brief": "## Goal\nDesign the layout of a small bakery's website: mobile-first wireframes and a colour palette.\n\n## Context\nPages: home with hero photo, menu, opening hours, location map, contact. No online ordering for now (assumption). Built later with Astro.\n\n## Constraints\nNo code yet; no stock photos with unclear licences.\n\n## Acceptance\n- Wireframes for every page in design/wireframes.md.\n- A palette of at most four colours with hex values.\n\n## Output format\nThe wireframe file path, the palette, and a two-line rationale.", "tier": "standard", "tags": ["ui", "design"]}}
+    ]},
+    {"tool_calls": [{"name": "await_tasks", "arguments": {}}]},
+    {"content": "Layout and palette are drafted (design/wireframes.md). I've asked about the domain, budget and online ordering; meanwhile I'm assuming Astro on a free static host. The build starts once the copy is ready."}
+  ]
+}

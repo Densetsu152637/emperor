@@ -1,0 +1,27 @@
+{
+  "id": "docs-fix-typo",
+  "description": "A trivial, fully specified edit: no questions, a basic local subagent (G11 over-asking, G2, G15).",
+  "class": "menial",
+  "prompt": "Fix the typo 'recieve' in the README.md of ~/code/notes.",
+  "expect": {
+    "routing": {"mode": "spawn", "subagents": 1, "tier": ["basic", "standard"], "tags_any": ["docs", "format"]},
+    "gaps": [
+      {"id": "which_readme", "kind": "researchable", "keywords": ["which readme", "which file"]},
+      {"id": "spelling", "kind": "safe_default", "keywords": ["british", "american", "spelling"]}
+    ],
+    "brief": {"must_mention": ["recieve", "receive", "README.md"]},
+    "success": {"final_contains_any": ["receive"], "awaited_all": true}
+  },
+  "replies": [
+    {"report": "Replaced 'recieve' with 'receive' in ~/code/notes/README.md (1 occurrence, line 12). No other files touched."}
+  ],
+  "reference": [
+    {"tool_calls": [{"name": "spawn_agent", "arguments": {
+      "brief": "## Goal\nFix the misspelling 'recieve' (should be 'receive') in ~/code/notes/README.md.\n\n## Context\nOnly README.md at the repository root.\n\n## Constraints\nChange nothing else.\n\n## Acceptance\n- No 'recieve' remains in README.md; every occurrence reads 'receive'.\n\n## Output format\nThe number of occurrences fixed and their line numbers.",
+      "tier": "basic",
+      "tags": ["docs"]
+    }}]},
+    {"tool_calls": [{"name": "await_tasks", "arguments": {}}]},
+    {"content": "Fixed: 'recieve' is now 'receive' in README.md (one occurrence, line 12)."}
+  ]
+}

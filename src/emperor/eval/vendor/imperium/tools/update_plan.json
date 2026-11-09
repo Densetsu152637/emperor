@@ -1,0 +1,71 @@
+{
+  "description": "Replace your plan: a goal, its steps in dependency order with statuses, and the assumptions and open questions behind it. Keep exactly one step in_progress while working.",
+  "name": "update_plan",
+  "parameters": {
+    "properties": {
+      "assumptions": {
+        "description": "Gaps you filled yourself, each with the value you chose",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "goal": {
+        "type": "string"
+      },
+      "open_questions": {
+        "description": "Decisions that are the user's to make or cannot be researched",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "steps": {
+        "items": {
+          "properties": {
+            "acceptance": {
+              "description": "The check that shows the step is done",
+              "type": "string"
+            },
+            "depends_on": {
+              "description": "Titles of the steps that must finish first",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "owner": {
+              "description": "Who does the step: yourself, or a subagent and its tier",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "pending",
+                "in_progress",
+                "done",
+                "blocked",
+                "skipped"
+              ],
+              "type": "string"
+            },
+            "title": {
+              "description": "Unique within the plan; depends_on refers to it",
+              "type": "string"
+            }
+          },
+          "required": [
+            "title",
+            "status"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "steps"
+    ],
+    "type": "object"
+  },
+  "status": "available"
+}

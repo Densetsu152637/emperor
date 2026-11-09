@@ -1,0 +1,20 @@
+{
+  "description": "Search the web; returns titles, URLs, and snippets. Fetch pages for details and cite their URLs.",
+  "name": "web_search",
+  "parameters": {
+    "properties": {
+      "count": {
+        "description": "Results to return, up to 20",
+        "type": "integer"
+      },
+      "query": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "type": "object"
+  },
+  "status": "available"
+}

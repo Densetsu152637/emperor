@@ -1,0 +1,23 @@
+{
+  "id": "e2e-changelog",
+  "description": "End to end: write a changelog entry from the git history of a scratch repo (G3).",
+  "class": "menial",
+  "prompt": "Write the CHANGELOG.md entry for version 1.4.0 of ~/eval/atlas from the commits since tag v1.3.0, grouped into Added, Changed and Fixed.",
+  "expect": {
+    "routing": {"mode": "spawn", "subagents": 1, "tier": ["basic", "standard"], "tags_any": ["docs"]},
+    "brief": {"must_mention": ["v1.3.0", "1.4.0", "CHANGELOG.md"]},
+    "success": {"final_contains_all": ["1.4.0", "Added", "Fixed"], "awaited_all": true}
+  },
+  "replies": [
+    {"report": "Wrote the 1.4.0 entry in CHANGELOG.md from 14 commits since v1.3.0: Added (3), Changed (2), Fixed (5); 4 chore commits omitted."}
+  ],
+  "reference": [
+    {"tool_calls": [{"name": "spawn_agent", "arguments": {
+      "brief": "## Goal\nWrite the CHANGELOG.md entry for version 1.4.0 of ~/eval/atlas from the commits since tag v1.3.0.\n\n## Context\nThe changelog follows Keep a Changelog; earlier entries show the style.\n\n## Constraints\nOnly edit CHANGELOG.md; skip chore and CI-only commits.\n\n## Acceptance\n- A 1.4.0 section with Added, Changed and Fixed groups covering every user-visible commit since v1.3.0.\n\n## Output format\nThe entry as written, and the number of commits included and skipped.",
+      "tier": "basic",
+      "tags": ["docs"]
+    }}]},
+    {"tool_calls": [{"name": "await_tasks", "arguments": {}}]},
+    {"content": "The 1.4.0 entry is in CHANGELOG.md: Added (3), Changed (2), Fixed (5), from 14 commits since v1.3.0; 4 chore commits were left out."}
+  ]
+}

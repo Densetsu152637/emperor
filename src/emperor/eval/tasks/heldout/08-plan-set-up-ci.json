@@ -1,0 +1,31 @@
+{
+  "id": "plan-set-up-ci",
+  "description": "Vague request with only researchable or defaultable gaps: plan, assume, do not ask (G10, G11).",
+  "prompt": "Set up CI for my repo at ~/code/atlas.",
+  "expect": {
+    "plan": {
+      "stages_any": [["detect", "inspect", "survey"], ["lint", "format"], ["test"], ["workflow", "pipeline"], ["verify", "green"]],
+      "dependencies": [[["detect", "inspect", "survey"], ["workflow", "pipeline"]], [["workflow", "pipeline"], ["verify", "green"]]],
+      "assumptions_min": 2
+    },
+    "gaps": [
+      {"id": "language", "kind": "researchable", "keywords": ["language", "stack"]},
+      {"id": "provider", "kind": "safe_default", "keywords": ["github actions", "ci provider", "which ci"]}
+    ]
+  },
+  "reference": [
+    {"tool_calls": [{"name": "update_plan", "arguments": {
+      "goal": "Every push and pull request to ~/code/atlas runs lint and tests in CI, and the first run on main is green.",
+      "steps": [
+        {"title": "Inspect the repo", "status": "in_progress", "owner": "subagent, basic", "acceptance": "Language, build tool, test command and lint tools listed"},
+        {"title": "Write the CI workflow", "status": "pending", "depends_on": ["Inspect the repo"], "owner": "subagent, standard", "acceptance": "Workflow runs lint and tests on push and pull_request"},
+        {"title": "Add lint and format checks", "status": "pending", "depends_on": ["Inspect the repo"], "owner": "subagent, basic", "acceptance": "Lint and format commands pass locally"},
+        {"title": "Make tests run headless", "status": "pending", "depends_on": ["Inspect the repo"], "owner": "subagent, basic", "acceptance": "The test command passes without a display or network"},
+        {"title": "Verify the first run is green", "status": "pending", "depends_on": ["Write the CI workflow", "Add lint and format checks", "Make tests run headless"], "owner": "self", "acceptance": "The first workflow run on main passes"}
+      ],
+      "assumptions": ["CI provider: GitHub Actions, since the remote is on GitHub", "Language and stack: detected from the repo by the inspection stage"],
+      "open_questions": []
+    }}]},
+    {"content": "Plan set: inspect the repo, then write a GitHub Actions workflow with lint and tests, and verify the first run is green. I assumed GitHub Actions and will detect the language from the repo. Starting the inspection."}
+  ]
+}

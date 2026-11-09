@@ -1,0 +1,24 @@
+{
+  "id": "web-python-match",
+  "description": "A small lookup the root does itself with the web tools and cites; page URLs are not leaks (G2, G5).",
+  "prompt": "Which Python version added the match statement? Cite a source.",
+  "expect": {
+    "routing": {"mode": "answer"},
+    "success": {"final_contains_all": ["3.10", "https://peps.python.org/pep-0634/"]}
+  },
+  "web": {
+    "search": {
+      "python match statement version": [
+        {"title": "PEP 634 - Structural Pattern Matching: Specification", "url": "https://peps.python.org/pep-0634/", "snippet": "Python-Version: 3.10. This PEP provides the technical specification for the match statement."}
+      ]
+    },
+    "fetch": {
+      "https://peps.python.org/pep-0634/": "PEP 634 - Structural Pattern Matching: Specification. Status: Final. Python-Version: 3.10. This PEP provides the technical specification for the match statement."
+    }
+  },
+  "reference": [
+    {"tool_calls": [{"name": "web_search", "arguments": {"query": "python match statement version"}}]},
+    {"tool_calls": [{"name": "web_fetch", "arguments": {"url": "https://peps.python.org/pep-0634/"}}]},
+    {"content": "Python 3.10 added the match statement (structural pattern matching), specified in PEP 634: https://peps.python.org/pep-0634/"}
+  ]
+}

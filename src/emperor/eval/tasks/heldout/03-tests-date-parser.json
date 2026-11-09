@@ -1,0 +1,23 @@
+{
+  "id": "tests-date-parser",
+  "description": "Menial test writing: one local subagent with the tests tag (G2, G15).",
+  "class": "menial",
+  "prompt": "Add unit tests for the date parser in ~/code/ledger/src/dates.py; it has none. Cover ISO dates, empty strings and invalid months.",
+  "expect": {
+    "routing": {"mode": "spawn", "subagents": 1, "tier": ["basic", "standard"], "tags_any": ["tests"], "single_call": false},
+    "brief": {"must_mention": ["dates.py", "ISO", "empty", "invalid month"]},
+    "success": {"final_contains_any": ["test_dates"], "awaited_all": true}
+  },
+  "replies": [
+    {"report": "Added tests/test_dates.py with 9 tests: ISO dates, the empty string, and months 0 and 13. pytest: 9 passed."}
+  ],
+  "reference": [
+    {"tool_calls": [{"name": "spawn_agent", "arguments": {
+      "brief": "## Goal\nAdd unit tests for the date parser in ~/code/ledger/src/dates.py, which has none.\n\n## Context\nPython project at ~/code/ledger; tests live in tests/ and run with pytest.\n\n## Constraints\nDo not change src/dates.py; only add tests.\n\n## Acceptance\n- Tests cover ISO dates, the empty string, and an invalid month (0 and 13).\n- pytest passes.\n\n## Output format\nThe new test file's path, the cases covered, and the pytest summary line.",
+      "tier": "basic",
+      "tags": ["tests"]
+    }}]},
+    {"tool_calls": [{"name": "await_tasks", "arguments": {}}]},
+    {"content": "Added tests/test_dates.py: 9 tests covering ISO dates, the empty string and invalid months 0 and 13; pytest reports 9 passed."}
+  ]
+}

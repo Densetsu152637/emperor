@@ -1,0 +1,31 @@
+{
+  "description": "Split a large stored artefact into chunks of about chunk_tokens tokens and give each chunk to its own subagent with the same brief. Returns task ids; collect the reports with await_tasks. With reduce, one more subagent merges the chunk reports using that instruction.",
+  "name": "delegate_chunks",
+  "parameters": {
+    "properties": {
+      "artefact_id": {
+        "description": "The stored artefact to split",
+        "type": "string"
+      },
+      "brief": {
+        "description": "What each subagent does with its chunk; self-contained",
+        "type": "string"
+      },
+      "chunk_tokens": {
+        "description": "Approximate size of each chunk in tokens",
+        "type": "integer"
+      },
+      "reduce": {
+        "description": "How to merge the chunk reports into one result",
+        "type": "string"
+      }
+    },
+    "required": [
+      "artefact_id",
+      "chunk_tokens",
+      "brief"
+    ],
+    "type": "object"
+  },
+  "status": "planned"
+}

@@ -1,0 +1,16 @@
+{
+  "description": "Wait for subagents to finish and return their reports. Omit task_ids to wait for all running tasks. Uses no tokens while waiting.",
+  "name": "await_tasks",
+  "parameters": {
+    "properties": {
+      "task_ids": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "status": "available"
+}
