@@ -37,3 +37,10 @@ seed = 1337
 [merge]
 adapter_dir = "outputs/sft/adapter"
 output_dir = "weights/emperor-4b-bf16"
+
+[release]
+name = "emperor-4b"  # weights/emperor-4b-gguf/, emperor-4b-<TYPE>.gguf
+title = "Emperor"
+eval_alias = "emperor"
+gguf_types = ["Q8_0", "Q6_K", "Q4_K_M"]
+context_tokens = 65536

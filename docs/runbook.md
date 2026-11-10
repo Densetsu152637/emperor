@@ -154,13 +154,23 @@ In Imperium-AI, on a branch off `experimental`:
 
 Ask the user before publishing anything.
 
-1. **Repositories** in the Hugging Face organisation: `emperor` (merged bf16 safetensors),
-   `emperor-GGUF` (all quants) and `emperor-AWQ`.
-2. **Model card**: intended use, limits, the eval table, the measured VRAM table, data sources
-   and licences, and the base model's licence (Apache 2.0 for Qwen3).
-3. **Upload** with `hf upload <org>/<repo> <local folder>`.
-4. **Recipe**: publish the training recipe and data pipeline from this repository.
-5. **Fold the plan** into Imperium's docs 03, 04, 12 (roadmap row) and 13 (decision record,
+1. **Export** (the pipeline does this after the merge; to run it alone on a finished run):
+   `uv run --group train release export` writes `weights/emperor-4b-gguf/` (bf16 plus Q8_0,
+   Q6_K, Q4_K_M, set by `[release] gguf_types`). `convert_hf_to_gguf.py` comes from a shallow
+   clone of llama.cpp `b12180` in `tools/llama.cpp` (ignored by Git); `llama-quantize` is
+   Imperium's runtime binary.
+2. **Model card**: `uv run release card` writes `README.md` into the bf16 and GGUF directories
+   from the config, the latest `runs/*/eval.json`, `data/report.json` and the export listing:
+   intended use, limits, the eval table, training recipe, dataset datasheet and a VRAM table.
+   Read it and fix the limits text in `[release]` before publishing.
+3. **Repositories** in the Hugging Face organisation: `emperor` (bf16) and `emperor-GGUF`.
+   Log in with `hf auth login` (or set `HF_TOKEN`); the tool never takes a token argument.
+4. **Upload**, after the user's go-ahead:
+   `uv run --group publish release publish --repo-id <org>/emperor --gguf-repo-id <org>/emperor-GGUF --confirm`.
+   Without `--confirm` it refuses and uploads nothing. Repos are created private; `--public`
+   makes them public.
+5. **Recipe**: publish the training recipe and data pipeline from this repository.
+6. **Fold the plan** into Imperium's docs 03, 04, 12 (roadmap row) and 13 (decision record,
    including the NCM decision), then delete the plan. `markdownlint-cli2` must be clean.
 
 ## Consul

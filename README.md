@@ -18,7 +18,8 @@ Imperium's `spawn_agent` and `await_tasks` tools.
 | `src/emperor/eval/` | Evaluation harness (stage 2b) |
 | `src/emperor/data/` | Prompt generation, local-teacher traces, judging, filtering, report (stage 4) |
 | `src/emperor/train/` | bf16 LoRA supervised fine-tuning and merge (stage 5) |
-| `src/emperor/export/` | Optional GGUF export through llama.cpp (stage 6) |
+| `src/emperor/export/` | GGUF export through llama.cpp: bf16 and quantised variants (stage 6) |
+| `src/emperor/release/` | Model cards, and the guarded Hugging Face publish |
 | `src/emperor/pipeline/` | The idle-gated orchestrator: data, train, merge, eval |
 | `configs/sft.toml` | The training recipe |
 | `data/`, `runs/`, `outputs/`, `weights/` | Generated locally and ignored by Git |
@@ -78,11 +79,22 @@ Phases (`--skip <phase>` skips one; every phase is resumable):
    loading; the config parser refuses such keys. The base directory is only read.
 6. **merge**: the adapter is merged into the base and saved as bf16 safetensors in
    `weights/emperor-4b-bf16/`.
-7. **export** (optional): GGUF through llama.cpp's `convert_hf_to_gguf.py`, found through
-   `--llama-cpp` or `EMPEROR_LLAMA_CPP` (needs the `gguf` Python package). Skipped when absent.
-8. **eval**: the merged GGUF (from export, or `--eval-gguf`) is served by `llama-server` and
-   `uv run eval` scores it. `runs/<timestamp>/summary.json` collects the data counts, training
-   metrics, pauses and eval metrics.
+7. **export**: GGUF through llama.cpp's `convert_hf_to_gguf.py` (a shallow clone of tag `b12180`
+   in the ignored `tools/llama.cpp`, or `--llama-cpp` / `EMPEROR_LLAMA_CPP`), then
+   `llama-quantize` to the `[release] gguf_types` (Q8_0, Q6_K, Q4_K_M). Writes
+   `weights/emperor-4b-gguf/`; every file is skipped when it already exists.
+8. **eval**: the bf16 GGUF (`--eval-type` picks another, `--eval-gguf` a file) is served by
+   `llama-server` and `uv run eval` scores it. `runs/<timestamp>/summary.json` collects the data
+   counts, training metrics, pauses and eval metrics.
+9. **card**: writes the Hugging Face `README.md` into `weights/emperor-4b-bf16/` and the GGUF
+   directory (see Release).
+
+`--only <phase>` (repeatable) runs just those phases of a run directory and leaves the rest of
+its state alone. To export and write cards for a run that already finished:
+
+```powershell
+uv run --group train pipeline --detach --resume runs/<timestamp> --only export --only card
+```
 
 Samples are append-only JSONL shards under `data/` (`traces/`, `rejects/`, `judged/`, `final/`).
 Each records its teacher (`gpt-oss-20b`), licence (`Apache-2.0`), seed and judge scores. The
@@ -105,11 +117,27 @@ applies during the run. Tunables: `--min-idle-minutes`, `--active-seconds`, `--m
 `llama-server` is found through `--llama-server`, `EMPEROR_LLAMA_SERVER`, `PATH`, then the newest
 runtime under `%LOCALAPPDATA%\Imperium\data\runtimes\llama.cpp`.
 
+### Release
+
+`uv run release {export,card,publish}` does the same steps outside the pipeline. The model
+name, card text, quantisation types and teacher description come from `[release]` in the config,
+so another model (Consul) reuses everything by changing that section. The card holds the front
+matter (Apache-2.0, base model, tags, `text-generation`), intended use, limits, the eval table
+from the latest report, the training recipe, a dataset datasheet and a memory table (KV cache
+computed from the model's `config.json`). Nothing is uploaded unless you run:
+
+```powershell
+uv run --group publish release publish --repo-id <org>/emperor --gguf-repo-id <org>/emperor-GGUF --confirm
+```
+
+It refuses without `--confirm`, reads the token only from `HF_TOKEN` or the Hugging Face login
+cache, creates private repos (`--public` to change that) and uploads model files only.
+
 ### Weights
 
 The merged model is `weights/emperor-4b-bf16/` (bf16 safetensors, tokenizer and config). The
-directory is ignored by Git. The weights will go to the Hugging Face Hub (or Git LFS) later; until
-then they stay on this machine.
+directory is ignored by Git. The weights go to the Hugging Face Hub only through
+`release publish --confirm`; until then they stay on this machine.
 
 ## Evaluation harness
 

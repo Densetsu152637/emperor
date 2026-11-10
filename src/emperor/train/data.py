@@ -129,7 +129,10 @@ def encode_sample(sample: dict, tokenizer, max_length: int) -> dict | None:
     return {"input_ids": ids, "labels": labels, "attention_mask": [1] * len(ids)}
 
 
-def _tool_definitions(sample: dict) -> list[dict]:
+def _tool_definitions(sample: dict) -> list[dict] | None:
+    """The tool definitions the sample was written against; None for chat-only samples."""
+    if not sample.get("tools"):
+        return None
     from emperor.eval.contract import openai_tools
 
     return openai_tools(sample["tools"])

@@ -6,24 +6,31 @@ import time
 from pathlib import Path
 
 
-def find_llama_server(explicit: str | Path | None = None) -> Path | None:
-    """The llama-server binary: option, EMPEROR_LLAMA_SERVER, PATH, then Imperium's runtime."""
+def find_llama_tool(
+    tool: str, explicit: str | Path | None = None, env: str | None = None
+) -> Path | None:
+    """A llama.cpp binary: option, environment variable, PATH, then Imperium's runtime."""
     import shutil
 
-    for candidate in (explicit, os.environ.get("EMPEROR_LLAMA_SERVER")):
+    for candidate in (explicit, os.environ.get(env) if env else None):
         if candidate and Path(candidate).is_file():
             return Path(candidate)
-    on_path = shutil.which("llama-server")
+    on_path = shutil.which(tool)
     if on_path:
         return Path(on_path)
     local = os.environ.get("LOCALAPPDATA")
     if local:
         runtimes = Path(local) / "Imperium" / "data" / "runtimes" / "llama.cpp"
-        name = "llama-server.exe" if os.name == "nt" else "llama-server"
+        name = f"{tool}.exe" if os.name == "nt" else tool
         found = sorted(runtimes.glob(f"*/*/bin/{name}"), key=lambda p: p.stat().st_mtime)
         if found:
             return found[-1]
     return None
+
+
+def find_llama_server(explicit: str | Path | None = None) -> Path | None:
+    """The llama-server binary: option, EMPEROR_LLAMA_SERVER, PATH, then Imperium's runtime."""
+    return find_llama_tool("llama-server", explicit, "EMPEROR_LLAMA_SERVER")
 
 
 class OwnProcesses:

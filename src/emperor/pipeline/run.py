@@ -1,4 +1,4 @@
-"""The pipeline: prompts, generate, judge, filter, train, merge, (export), eval, summary.
+"""The pipeline: prompts, generate, judge, filter, train, merge, export, eval, card, summary.
 
 Every GPU phase runs only while `IdleGate` allows it. When the user returns, the phase is
 paused cleanly (llama-server stopped; training saves a checkpoint and exits) and resumed when
@@ -24,7 +24,7 @@ from emperor.data.prompts import HeldoutIndex, generate_prompts, normalise
 from emperor.data.shards import done_ids, iter_records, read_jsonl
 from emperor.data.teacher import ChatClient
 from emperor.eval.cli import CONTEXT_TIERS
-from emperor.export.gguf import convert, find_converter
+from emperor.export.gguf import DEFAULT_CACHE, gguf_dir_for, gguf_name
 from emperor.pipeline.idle import IdleGate, wait_until_idle
 from emperor.pipeline.processes import (
     ManagedProcess,
@@ -33,11 +33,12 @@ from emperor.pipeline.processes import (
     llama_server_command,
     wait_for_health,
 )
-from emperor.train.config import load_config
+from emperor.release.card import write_cards
+from emperor.train.config import SftConfig, load_config
 
 log = logging.getLogger("emperor.pipeline")
 PAUSED = 75
-PHASES = ["prompts", "generate", "judge", "filter", "train", "merge", "export", "eval"]
+PHASES = ["prompts", "generate", "judge", "filter", "train", "merge", "export", "eval", "card"]
 DEFAULT_TEACHER_GGUF = "D:/AI-Models/unsloth/gpt-oss-20b-GGUF/gpt-oss-20b-Q4_K_M.gguf"
 
 
@@ -57,13 +58,17 @@ class Settings:
     reasoning_effort: str = "medium"
     llama_server: Path | None = None
     llama_cpp: Path | None = None
+    llama_cache: Path = DEFAULT_CACHE
+    quantize: Path | None = None
     train_config: Path = Path("configs/sft.toml")
     eval_gguf: Path | None = None
+    eval_type: str = "bf16"
     eval_port: int = 8082
     eval_tier: str = "64k"
     poll_seconds: float = 30.0
     pause_grace_seconds: float = 900.0
     skip: set[str] = field(default_factory=set)
+    only: set[str] = field(default_factory=set)
 
 
 class GateWatcher:
@@ -196,6 +201,14 @@ class Pipeline:
         self.started = datetime.now(UTC).isoformat()
 
     # -- helpers ---------------------------------------------------------------------------
+
+    @property
+    def sft(self) -> SftConfig:
+        return load_config(self.s.root / self.s.train_config)
+
+    def teacher_info(self) -> dict:
+        release = self.sft.release
+        return {"model": release.teacher, "licence": release.teacher_licence}
 
     def quit_requested(self) -> bool:
         return self.interrupted or self.stop_file.exists()
@@ -400,39 +413,55 @@ class Pipeline:
         return result
 
     def phase_export(self) -> dict:
-        config = load_config(self.s.root / self.s.train_config)
-        if find_converter(self.s.llama_cpp) is None:
-            return {
-                "status": "skipped",
-                "reason": "convert_hf_to_gguf.py not found (EMPEROR_LLAMA_CPP)",
-            }
-        weights = (self.s.root / config.merge.output_dir).resolve()
-        outfile = self.s.root / "weights" / "emperor-4b-bf16.gguf"
-        try:
-            convert(weights, outfile, llama_cpp=self.s.llama_cpp)
-        except Exception as error:
-            return {"status": "failed", "error": str(error)}
-        return {"status": "done", "gguf": str(outfile)}
+        """bf16 GGUF and quantised variants into weights/<name>-gguf/ (CPU, resumable)."""
+        config = self.sft
+        args = [
+            "emperor.release.cli", "export",
+            "--config", str(self.s.root / self.s.train_config),
+            "--root", str(self.s.root),
+            "--llama-cache", str(self.s.root / self.s.llama_cache),
+        ]  # fmt: skip
+        if self.s.llama_cpp:
+            args += ["--llama-cpp", str(self.s.llama_cpp)]
+        if self.s.quantize:
+            args += ["--quantize", str(self.s.quantize)]
+        result = self._run_module("export", args)
+        directory = gguf_dir_for(self.s.root, config.release.name, config.release.gguf_dir)
+        result["gguf_dir"] = str(directory)
+        if result["status"] == "done":
+            listing = json.loads((directory / "export.json").read_text(encoding="utf-8"))
+            result["files"] = [f["file"] for f in listing["files"]]
+        return result
+
+    def eval_gguf(self) -> Path | None:
+        if self.s.eval_gguf:
+            return self.s.eval_gguf
+        release = self.sft.release
+        directory = gguf_dir_for(self.s.root, release.name, release.gguf_dir)
+        path = directory / gguf_name(release.name, self.s.eval_type)
+        return path if path.is_file() else None
+
+    def eval_command(self, report: Path) -> list[str]:
+        """The process that scores the served model; subclasses swap in their own harness."""
+        return [
+            sys.executable, "-m", "emperor.eval.cli",
+            "--model", f"llamacpp:{self.sft.release.eval_alias}",
+            "--base-url", f"http://127.0.0.1:{self.s.eval_port}/v1",
+            "--context-tier", self.s.eval_tier,
+            "--output", str(report),
+        ]  # fmt: skip
 
     def phase_eval(self) -> dict:
-        gguf = self.s.eval_gguf
-        if gguf is None:
-            exported = self.state["phases"].get("export", {}).get("gguf")
-            gguf = Path(exported) if exported else None
+        gguf = self.eval_gguf()
         if gguf is None:
             return {"status": "skipped", "reason": "no GGUF of the merged model (see export)"}
         report = self.s.run_dir / "eval.json"
         context = CONTEXT_TIERS[self.s.eval_tier]
 
         def work(server, should_stop):
-            command = [
-                sys.executable, "-m", "emperor.eval.cli",
-                "--model", "llamacpp:emperor",
-                "--base-url", f"http://127.0.0.1:{self.s.eval_port}/v1",
-                "--context-tier", self.s.eval_tier,
-                "--output", str(report),
-            ]  # fmt: skip
-            run = ManagedProcess(command, self.s.run_dir / "eval.log", self.own).start()
+            run = ManagedProcess(
+                self.eval_command(report), self.s.run_dir / "eval.log", self.own
+            ).start()
             while run.poll() is None:
                 time.sleep(5)
                 if should_stop():
@@ -450,10 +479,19 @@ class Pipeline:
             result["tasks_failed"] = data.get("tasks_failed")
         return result
 
+    def phase_card(self) -> dict:
+        """Hugging Face README.md for the bf16 weights and the GGUF directory."""
+        try:
+            written = write_cards(self.sft, self.s.root, self.s.run_dir)
+        except FileNotFoundError as error:
+            return {"status": "failed", "error": str(error)}
+        return {"status": "done", "cards": [str(p) for p in written]}
+
     # -- driver ----------------------------------------------------------------------------
 
-    def run(self) -> dict:
-        phases: list[tuple[str, Callable[[], dict]]] = [
+    def phases(self) -> list[tuple[str, Callable[[], dict]]]:
+        """The phases in order; a pipeline for another model overrides the methods or this."""
+        return [
             ("prompts", self.phase_prompts),
             ("generate", self.phase_generate),
             ("judge", self.phase_judge),
@@ -462,9 +500,14 @@ class Pipeline:
             ("merge", self.phase_merge),
             ("export", self.phase_export),
             ("eval", self.phase_eval),
+            ("card", self.phase_card),
         ]
+
+    def run(self) -> dict:
         status = "done"
-        for name, function in phases:
+        for name, function in self.phases():
+            if self.s.only and name not in self.s.only:
+                continue  # leave the recorded state of other phases untouched
             if name in self.s.skip:
                 self._record(name, {"status": "skipped", "reason": "--skip"})
                 continue
@@ -491,7 +534,7 @@ class Pipeline:
 
     def write_summary(self, status: str) -> dict:
         data_report = self.s.data_dir / "report.json"
-        train_result = self.s.root / "outputs" / "sft" / "train_result.json"
+        train_result = self.s.root / self.sft.train.output_dir / "train_result.json"
         summary = {
             "status": status,
             "started": self.started,
@@ -505,7 +548,7 @@ class Pipeline:
             if train_result.exists()
             else None,
             "eval": self.state["phases"].get("eval"),
-            "teacher": {"model": "gpt-oss-20b", "licence": "Apache-2.0"},
+            "teacher": self.teacher_info(),
         }
         (self.s.run_dir / "summary.json").write_text(
             json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
