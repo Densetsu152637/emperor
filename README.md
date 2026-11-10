@@ -5,7 +5,8 @@ agent of an [Imperium](https://github.com/Densetsu152637/Imperium-AI) session on
 it plans, writes compact briefs, and delegates the work to hosted and local subagents through
 Imperium's `spawn_agent` and `await_tasks` tools.
 
-> **Status:** stage 2b (eval harness). The plan of record is
+> **Status:** stage 2b (eval harness), plus a first dataset, training and pipeline
+> implementation for stages 4 to 6. The plan of record is
 > [`docs/plans/emperor.md`](https://github.com/Densetsu152637/Imperium-AI/blob/docs/dispatcher-model-plan/docs/plans/emperor.md)
 > in the Imperium repository.
 
@@ -14,11 +15,15 @@ Imperium's `spawn_agent` and `await_tasks` tools.
 | Path | Holds |
 | ---- | ----- |
 | `src/emperor/eval/` | Evaluation harness (stage 2b) |
-| `src/emperor/data/` | Dataset builders and validation (stage 4, not yet) |
-| `src/emperor/train/` | Fine-tuning recipes (stages 5 and 6, not yet) |
-| `src/emperor/export/` | Merging and GGUF/AWQ export (stage 6, not yet) |
+| `src/emperor/data/` | Prompt generation, local-teacher traces, judging, filtering, report (stage 4) |
+| `src/emperor/train/` | bf16 LoRA supervised fine-tuning and merge (stage 5) |
+| `src/emperor/export/` | Optional GGUF export through llama.cpp (stage 6) |
+| `src/emperor/pipeline/` | The idle-gated orchestrator: data, train, merge, eval |
+| `configs/sft.toml` | The training recipe |
+| `data/`, `runs/`, `outputs/`, `weights/` | Generated locally and ignored by Git |
 
-Weights and datasets live on the Hugging Face Hub, not in Git.
+Weights and datasets are not stored in Git. They are written under `data/` and `weights/`
+(both ignored); publishing to the Hugging Face Hub or Git LFS is deferred.
 
 ## Development
 
@@ -27,7 +32,83 @@ uv sync
 uv run eval --help
 uv run eval --model llamacpp:emperor --dry-run
 bash scripts/check.sh   # what CI runs
+uv sync --group data --group train   # optional: data generation and training (multi-GB torch)
 ```
+
+## Dataset, training and pipeline
+
+Everything here runs on this machine. No Claude, Anthropic or OpenAI API is used to generate or
+judge data; the teacher is a local model and the client refuses any non-loopback endpoint.
+
+```powershell
+# Start the whole build in the background (writes runs/<timestamp>/ and returns at once).
+uv run --group data --group train pipeline --detach
+# Same, but the user is asleep: ignore the idle gate.
+uv run --group data --group train pipeline --detach --asleep
+# Watch it, stop it cleanly, or continue a run.
+Get-Content runs/<timestamp>/pipeline.log -Wait
+New-Item runs/<timestamp>/STOP        # finish the current step and exit
+uv run --group data --group train pipeline --detach --resume runs/<timestamp>
+```
+
+Phases (`--skip <phase>` skips one; every phase is resumable):
+
+1. **prompts**: seeded, deduplicated requests across coding, refactor, research, planning,
+   clarify, docs, architecture, long input and quick answers, from vague to specific. Each
+   candidate is checked against `tasks/heldout`, `tasks/e2e` and `tasks/longctx` with a 3-gram
+   overlap test (Jaccard similarity or containment of 0.4 or more is dropped).
+2. **generate**: gpt-oss-20b (Apache-2.0, `D:\AI-Models\unsloth\gpt-oss-20b-GGUF`) served by
+   `llama-server` plays Emperor with `emperor-root.md`, the brief/plan/question shapes and the
+   target style: concise and structured, big picture first, delegates instead of pasting code,
+   few emojis, no walls of tables, searches instead of recalling facts, never handles
+   credentials. A separate "environment" call simulates the tool results. The stored sample keeps
+   only the plain Emperor prompt, so the style is learned rather than instructed.
+3. **judge**: the same model scores each trace 1-5 on eight criteria and answers pass or fail as
+   JSON. A trace is kept when the judge passes it, the mean is at least 4.0 (`--threshold`), no
+   criterion is below 3, and the emoji, table and pasted-code checks are clean. Schema checks run
+   first: tool calls validate against the vendored schemas, roles alternate, briefs have Goal and
+   Acceptance sections and fit 2,000 tokens, and there are no secrets (the eval harness's leak
+   patterns).
+4. **filter**: writes `data/final/final.jsonl` and `data/report.json` (counts, pass rate, score
+   histograms, rejection reasons).
+5. **train**: `configs/sft.toml`, bf16 LoRA on `D:\AI-Models\unsloth\Qwen3-4B-Instruct-2507`
+   with TRL, gradient checkpointing, assistant-only loss, sequence length 8192, no packing, a
+   checkpoint every 50 steps and resume from the last one. There is no QLoRA and no 4/8-bit
+   loading; the config parser refuses such keys. The base directory is only read.
+6. **merge**: the adapter is merged into the base and saved as bf16 safetensors in
+   `weights/emperor-4b-bf16/`.
+7. **export** (optional): GGUF through llama.cpp's `convert_hf_to_gguf.py`, found through
+   `--llama-cpp` or `EMPEROR_LLAMA_CPP` (needs the `gguf` Python package). Skipped when absent.
+8. **eval**: the merged GGUF (from export, or `--eval-gguf`) is served by `llama-server` and
+   `uv run eval` scores it. `runs/<timestamp>/summary.json` collects the data counts, training
+   metrics, pauses and eval metrics.
+
+Samples are append-only JSONL shards under `data/` (`traces/`, `rejects/`, `judged/`, `final/`).
+Each records its teacher (`gpt-oss-20b`), licence (`Apache-2.0`), seed and judge scores. The
+steps can also be run alone: `uv run --group data data {prompts,generate,judge,filter,report,validate}`
+and `uv run --group train train {show,fit,merge}`.
+
+### Idle gate
+
+A GPU phase starts only when there has been no keyboard or mouse input for 15 minutes (Win32
+`GetLastInputInfo`) and other processes use under 15% of the GPU (`nvidia-smi`), or `--asleep` is
+passed. While a phase runs, the pipeline pauses when there was input in the last 60 seconds or
+another process loads the GPU: `llama-server` is stopped, training saves a checkpoint and exits
+(through a pause file, with a 15-minute grace before the process is stopped), and the phase
+resumes when the start condition holds again. Only processes the pipeline started are stopped,
+and by PID. While a pipeline process is on the GPU, other processes' load comes from
+`nvidia-smi pmon`; where the driver does not report it (common on Windows), only the input check
+applies during the run. Tunables: `--min-idle-minutes`, `--active-seconds`, `--max-gpu-util`,
+`--poll-seconds`.
+
+`llama-server` is found through `--llama-server`, `EMPEROR_LLAMA_SERVER`, `PATH`, then the newest
+runtime under `%LOCALAPPDATA%\Imperium\data\runtimes\llama.cpp`.
+
+### Weights
+
+The merged model is `weights/emperor-4b-bf16/` (bf16 safetensors, tokenizer and config). The
+directory is ignored by Git. The weights will go to the Hugging Face Hub (or Git LFS) later; until
+then they stay on this machine.
 
 ## Evaluation harness
 
