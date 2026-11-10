@@ -322,3 +322,18 @@ def test_chat_only_samples_have_no_tool_definitions():
 
     assert _tool_definitions({"messages": []}) is None
     assert _tool_definitions({"tools": [], "messages": []}) is None
+
+
+def test_project_entrypoint_dispatch(tmp_path, monkeypatch):
+    from emperor import dispatch
+
+    assert dispatch.project_entrypoint("pipeline", tmp_path) is None
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.emperor.entrypoints]\npipeline = "json:dumps"\n', encoding="utf-8"
+    )
+    import json
+
+    assert dispatch.project_entrypoint("pipeline", tmp_path) is json.dumps
+    assert dispatch.project_entrypoint("eval", tmp_path) is None
+    monkeypatch.chdir(tmp_path)
+    assert dispatch.pipeline_main(["--help"]) == json.dumps(["--help"])  # delegated
