@@ -10,7 +10,7 @@ from emperor.data.generate import Chat
 from emperor.data.schema import count_emojis
 from emperor.data.shards import ShardWriter, done_ids, iter_records
 from emperor.data.style import CRITERIA, judge_system
-from emperor.data.teacher import TEACHER_MODEL, TeacherError
+from emperor.data.teacher import TEACHER_MODEL, TeacherError, TeacherOutputError
 
 MEAN_THRESHOLD = 4.0
 MIN_CRITERION = 3
@@ -192,6 +192,9 @@ def run_judging(
             result = judge_sample(sample, client, seed=sample["meta"]["seed"])
             keep, reasons = decide(result, threshold)
             judge = {**result.to_dict(), "model": TEACHER_MODEL, "keep": keep, "rejection": reasons}
+        except TeacherOutputError as error:
+            judge = {"keep": False, "rejection": ["judge_unparseable"], "reason": str(error)}
+            keep = False
         except TeacherError as error:
             counts["stopped"] = True
             counts["error"] = str(error)

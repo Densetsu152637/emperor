@@ -15,7 +15,7 @@ from emperor.data.prompts import PromptRecord
 from emperor.data.schema import LICENCE, validate_sample
 from emperor.data.shards import ShardWriter, done_ids, read_jsonl
 from emperor.data.style import STYLE
-from emperor.data.teacher import TEACHER_MODEL, TeacherError
+from emperor.data.teacher import TEACHER_MODEL, TeacherError, TeacherOutputError
 from emperor.eval.contract import check_call, openai_tools, prompt, system_prompt
 
 
@@ -270,6 +270,8 @@ def run_generation(
             break
         try:
             sample, reason = generate_trace(record, teacher, env_client, config)
+        except TeacherOutputError:
+            sample, reason = None, "teacher_output_unparsable"
         except TeacherError as error:
             # The server is gone (paused, crashed): leave the id undone and let the caller retry.
             counts["stopped"] = True
