@@ -8,10 +8,10 @@ requires-python = ">=3.12"
 dependencies = []
 
 [project.scripts]
-eval = "emperor.eval.cli:main"
-data = "emperor.data.cli:main"
+eval = "emperor.dispatch:eval_main"
+data = "emperor.dispatch:data_main"
 train = "emperor.train.cli:main"
-pipeline = "emperor.pipeline.cli:main"
+pipeline = "emperor.dispatch:pipeline_main"
 release = "emperor.release.cli:main"
 
 [dependency-groups]
