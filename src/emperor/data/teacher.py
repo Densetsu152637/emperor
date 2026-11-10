@@ -13,6 +13,11 @@ TEACHER_LICENCE = "Apache-2.0"
 _LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
 
 
+class TeacherOutputError(RuntimeError):
+    """The server is up but rejected what the model produced (llama.cpp answers 500 when the
+    output does not parse as the chat format): one bad sample, not a dead server."""
+
+
 class TeacherError(RuntimeError):
     """The local teacher could not be reached or answered with something unusable."""
 
@@ -72,6 +77,7 @@ class ChatClient:
         if self.reasoning_effort:
             body["chat_template_kwargs"] = {"reasoning_effort": self.reasoning_effort}
         last: Exception | None = None
+        server_rejected = 0
         for attempt in range(self.retries):
             try:
                 response = self._http.post(f"{self.base_url}/chat/completions", json=body)
@@ -81,7 +87,12 @@ class ChatClient:
                 last = error
             except Exception as error:  # httpx errors; kept broad so one blip does not kill a run
                 last = error
+                status = getattr(getattr(error, "response", None), "status_code", None)
+                if status is not None and status >= 500:
+                    server_rejected += 1
             time.sleep(min(2**attempt, 10))
+        if server_rejected == self.retries:
+            raise TeacherOutputError(f"server rejected the output {self.retries} times: {last}")
         raise TeacherError(f"teacher request failed after {self.retries} tries: {last}")
 
     def wait_until_ready(self, seconds: float = 300.0) -> bool:
