@@ -1,6 +1,7 @@
 """`uv run --group data --group train pipeline`: the whole Emperor build, gated on idleness.
 
-generate -> judge -> filter -> train -> merge -> (export) -> eval -> runs/<timestamp>/summary.json
+prompts -> generate -> judge -> filter -> train -> merge -> export -> eval -> card
+(`runs/<timestamp>/summary.json`)
 
 GPU phases start only when there has been no keyboard or mouse input for 15 minutes and no other
 process is using the GPU, unless `--asleep` is passed. They pause when the user returns.
@@ -16,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from emperor.eval.cli import CONTEXT_TIERS
+from emperor.export.gguf import DEFAULT_CACHE
 from emperor.pipeline.idle import (
     DEFAULT_ACTIVE_SECONDS,
     DEFAULT_MAX_GPU_UTIL,
@@ -34,14 +36,23 @@ from emperor.pipeline.run import (
 DETACHED = 0x00000008 | 0x00000200 | 0x08000000  # DETACHED_PROCESS | NEW_PROCESS_GROUP | NO_WINDOW
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="pipeline", description=__doc__.strip().splitlines()[0])
+def build_parser(prog: str = "pipeline", description: str | None = None) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=prog, description=description or __doc__.strip().splitlines()[0]
+    )
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="repository root")
     parser.add_argument(
         "--resume", type=Path, help="continue an existing runs/<timestamp> directory"
     )
     parser.add_argument("--detach", action="store_true", help="run in the background and return")
     parser.add_argument("--skip", action="append", choices=PHASES, default=[], help="skip a phase")
+    parser.add_argument(
+        "--only",
+        action="append",
+        choices=PHASES,
+        default=[],
+        help="run just this phase (repeatable); other phases keep their recorded state",
+    )
 
     idle = parser.add_argument_group("idle gate")
     idle.add_argument("--asleep", action="store_true", help="the user is asleep: ignore the gate")
@@ -66,8 +77,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     train = parser.add_argument_group("train, export, eval")
     train.add_argument("--train-config", type=Path, default=Path("configs/sft.toml"))
-    train.add_argument("--llama-cpp", type=Path, help="llama.cpp checkout for GGUF export")
+    train.add_argument("--llama-cpp", type=Path, help="llama.cpp checkout (default: clone b12180)")
+    train.add_argument("--llama-cache", type=Path, default=DEFAULT_CACHE, help="clone location")
+    train.add_argument("--quantize", type=Path, help="llama-quantize binary (default: Imperium's)")
     train.add_argument("--eval-gguf", type=Path, help="GGUF to evaluate instead of the export")
+    train.add_argument("--eval-type", default="bf16", help="exported GGUF type to evaluate")
     train.add_argument("--eval-port", type=int, default=8082)
     train.add_argument("--eval-tier", choices=list(CONTEXT_TIERS), default="64k")
     return parser
@@ -90,16 +104,20 @@ def settings_from(args, run_dir: Path) -> Settings:
         reasoning_effort=args.reasoning_effort,
         llama_server=args.llama_server,
         llama_cpp=args.llama_cpp,
+        llama_cache=args.llama_cache,
+        quantize=args.quantize,
         train_config=args.train_config,
         eval_gguf=args.eval_gguf,
+        eval_type=args.eval_type,
         eval_port=args.eval_port,
         eval_tier=args.eval_tier,
         poll_seconds=args.poll_seconds,
         skip=set(args.skip),
+        only=set(args.only),
     )
 
 
-def detach(argv: list[str], run_dir: Path) -> int:
+def detach(argv: list[str], run_dir: Path, module: str = "emperor.pipeline.cli") -> int:
     """Relaunch this command without a console, outliving the terminal that started it."""
     child = [a for a in argv if a != "--detach"]
     if "--resume" not in child:
@@ -107,7 +125,7 @@ def detach(argv: list[str], run_dir: Path) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     out = (run_dir / "stdout.log").open("ab")
     proc = subprocess.Popen(
-        [sys.executable, "-m", "emperor.pipeline.cli", *child],
+        [sys.executable, "-m", module, *child],
         stdout=out,
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
@@ -121,9 +139,18 @@ def detach(argv: list[str], run_dir: Path) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    pipeline_class: type[Pipeline] = Pipeline,
+    module: str = "emperor.pipeline.cli",
+    prog: str = "pipeline",
+    description: str | None = None,
+) -> int:
+    """Run the pipeline. Another model's package passes its own `pipeline_class` (a subclass
+    overriding the data and eval phases) and `module`, so `--detach` relaunches that entry."""
     argv = list(sys.argv[1:] if argv is None else argv)
-    args = build_parser().parse_args(argv)
+    args = build_parser(prog, description).parse_args(argv)
     root = args.root.resolve()
     run_dir = (
         args.resume.resolve()
@@ -131,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
         else root / "runs" / datetime.now().strftime("%Y%m%d-%H%M%S")
     )
     if args.detach:
-        return detach(argv, run_dir)
+        return detach(argv, run_dir, module)
     run_dir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
@@ -149,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
         max_gpu_util=args.max_gpu_util,
         own_pids=own.pids,
     )
-    pipeline = Pipeline(settings_from(args, run_dir), gate, own)
+    pipeline = pipeline_class(settings_from(args, run_dir), gate, own)
     install_signal_handlers(pipeline)
     logging.getLogger("emperor.pipeline").info(
         "run %s (asleep=%s); create %s to stop cleanly", run_dir, args.asleep, run_dir / "STOP"

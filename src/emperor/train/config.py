@@ -71,12 +71,54 @@ class MergeConfig:
 
 
 @dataclass
+class ReleaseConfig:
+    """What the release tooling (GGUF export, model card, publish) needs to name and describe
+    the model. Only the name has to differ between models that share this package."""
+
+    name: str = "emperor-4b"  # weights/<name>-gguf/, <name>-<TYPE>.gguf, the card title
+    title: str = "Emperor"
+    summary: str = (
+        "Emperor is an open-weight root agent for Imperium: it plans, writes compact briefs "
+        "and delegates the work to subagents through tool calls."
+    )
+    eval_alias: str = "emperor"  # the model name the eval harness and llama-server see
+    license: str = "apache-2.0"
+    tags: list[str] = field(default_factory=lambda: ["imperium", "agent", "lora", "qwen3"])
+    gguf_dir: str = ""  # default: weights/<name>-gguf
+    gguf_types: list[str] = field(default_factory=lambda: ["Q8_0", "Q6_K", "Q4_K_M"])
+    context_tokens: int = 65536  # the context the card sizes memory for
+    intended_use: list[str] = field(
+        default_factory=lambda: [
+            "Acting as the root agent of an Imperium session: planning, briefing and delegating.",
+        ]
+    )
+    limits: list[str] = field(
+        default_factory=lambda: [
+            "A 4B model: it can be wrong, and its answers need the checks Imperium applies.",
+            "Trained on synthetic data from one teacher model; coverage outside it is untested.",
+        ]
+    )
+    teacher: str = "gpt-oss-20b"
+    teacher_licence: str = "Apache-2.0"
+    judge: str = "gpt-oss-20b (local, scored 1-5 on eight criteria with a pass or fail)"
+    filters: list[str] = field(
+        default_factory=lambda: [
+            "schema checks (tool calls, roles, brief sections and size)",
+            "no secrets or credentials",
+            "overlap test against the held-out eval tasks",
+            "judge pass and a mean score threshold",
+        ]
+    )
+
+
+@dataclass
 class SftConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     data: DataConfig = field(default_factory=DataConfig)
     lora: LoraConfig = field(default_factory=LoraConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
     merge: MergeConfig = field(default_factory=MergeConfig)
+    release: ReleaseConfig = field(default_factory=ReleaseConfig)
 
     @property
     def dtype(self) -> str:
@@ -106,6 +148,7 @@ def parse_config(raw: dict) -> SftConfig:
         "lora": LoraConfig,
         "train": TrainConfig,
         "merge": MergeConfig,
+        "release": ReleaseConfig,
     }
     for name in raw:
         if name not in sections:
@@ -121,6 +164,11 @@ def parse_config(raw: dict) -> SftConfig:
         raise ConfigError("[train] save_steps and eval_steps must be at least 1")
     if config.lora.r < 1:
         raise ConfigError("[lora] r must be at least 1")
+    name = config.release.name
+    if not name or any(c in name for c in ("/", "\\", " ", ":", "*", "?", '"', "<", ">", "|")):
+        raise ConfigError("[release] name must be a plain file name")
+    if not config.release.gguf_types:
+        raise ConfigError("[release] gguf_types must list at least one type")
     return config
 
 

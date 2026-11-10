@@ -12,3 +12,5 @@ uv run eval --model llamacpp:emperor --dry-run > /dev/null
 uv run data --help > /dev/null
 uv run pipeline --help > /dev/null
 uv run train show > /dev/null
+uv run release --help > /dev/null
+uv run release publish --help > /dev/null

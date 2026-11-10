@@ -14,3 +14,4 @@ build/
 /runs/
 *.gguf
 *.safetensors
+/tools/
