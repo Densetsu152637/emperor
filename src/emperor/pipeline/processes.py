@@ -19,7 +19,8 @@ def find_llama_server(explicit: str | Path | None = None) -> Path | None:
     local = os.environ.get("LOCALAPPDATA")
     if local:
         runtimes = Path(local) / "Imperium" / "data" / "runtimes" / "llama.cpp"
-        found = sorted(runtimes.glob("*/*/bin/llama-server*"), key=lambda p: p.stat().st_mtime)
+        name = "llama-server.exe" if os.name == "nt" else "llama-server"
+        found = sorted(runtimes.glob(f"*/*/bin/{name}"), key=lambda p: p.stat().st_mtime)
         if found:
             return found[-1]
     return None
@@ -103,9 +104,18 @@ class ManagedProcess:
 
 
 def llama_server_command(
-    binary: Path, model: Path, port: int, context: int, parallel: int = 1
+    binary: Path,
+    model: Path,
+    port: int,
+    context: int,
+    parallel: int = 1,
+    vram_margin_mib: int = 1536,
 ) -> list[str]:
-    """llama-server on loopback with GPU offload and the model's own chat template (tool calls)."""
+    """llama-server on loopback with the model's own chat template (tool calls).
+
+    `--fit` puts as many layers in VRAM as fit with `vram_margin_mib` to spare and keeps the rest
+    on the CPU, so the model runs partly on the GPU beside whatever else is using it.
+    """
     return [
         str(binary),
         "-m", str(model),
@@ -113,7 +123,9 @@ def llama_server_command(
         "--port", str(port),
         "-c", str(context * parallel),
         "-np", str(parallel),
-        "-ngl", "99",
+        "-ngl", "auto",
+        "--fit", "on",
+        "--fit-target", str(vram_margin_mib),
         "--jinja",
     ]  # fmt: skip
 
