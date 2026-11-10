@@ -15,6 +15,16 @@ log = logging.getLogger("emperor.train")
 PAUSED_EXIT_CODE = 75  # EX_TEMPFAIL: a checkpoint was saved and the run should be resumed
 
 
+def gpu_split(margin_gib: float = 1.5) -> dict:
+    """Free VRAM less a margin for the GPU, the rest from system RAM: training runs partly on the
+    GPU when another process holds some of it, and fully on it when the card is free."""
+    import torch
+
+    free, _total = torch.cuda.mem_get_info(0)
+    gpu_gib = max(free / 2**30 - margin_gib, 1.0)
+    return {0: f"{gpu_gib:.1f}GiB", "cpu": "48GiB"}
+
+
 def _resolve(path: str, root: Path) -> Path:
     p = Path(path)
     return p if p.is_absolute() else root / p
@@ -65,7 +75,8 @@ def train(config: SftConfig, root: Path, pause_file: Path | None = None) -> int:
         base,
         dtype=torch.bfloat16,  # full-precision (bf16) weights; never quantised
         attn_implementation=config.model.attn_implementation,
-        device_map={"": 0},
+        device_map="auto",
+        max_memory=gpu_split(),
     )
     model.config.use_cache = False
     if config.train.gradient_checkpointing:
