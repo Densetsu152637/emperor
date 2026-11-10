@@ -9,9 +9,33 @@ dependencies = []
 
 [project.scripts]
 eval = "emperor.eval.cli:main"
+data = "emperor.data.cli:main"
+train = "emperor.train.cli:main"
+pipeline = "emperor.pipeline.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.8"]
+# Synthetic data generation against a local llama-server (`uv run --group data data ...`).
+data = ["httpx>=0.27"]
+# bf16 LoRA fine-tuning and merging. The torch wheel comes from the CUDA 12.8 index because
+# Blackwell cards (RTX 50 series) need cu128 or newer. Not synced by default: it is multi-GB.
+train = [
+    "torch>=2.8",
+    "transformers>=4.56",
+    "peft>=0.17",
+    "trl>=1.0",
+    "datasets>=4.0",
+    "accelerate>=1.10",
+    "safetensors>=0.5",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]
@@ -23,6 +47,9 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/emperor/data/prompts.py" = ["E501"]  # template and vocabulary tables
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

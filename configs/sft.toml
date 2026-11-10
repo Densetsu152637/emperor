@@ -1,0 +1,39 @@
+# Emperor supervised fine-tuning: bf16 LoRA on full-precision weights (no QLoRA, no 4/8-bit).
+# Paths are relative to the repository root unless absolute. The base is read-only.
+
+[model]
+base = "D:/AI-Models/unsloth/Qwen3-4B-Instruct-2507"
+attn_implementation = "sdpa"  # flash-attn has no Windows wheel
+
+[data]
+path = "data/final/final.jsonl"
+max_length = 8192  # lower to 4096 if the 16 GB card runs out of memory
+val_fraction = 0.05
+split_seed = 1337
+
+[lora]
+r = 32
+alpha = 64
+dropout = 0.05
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+[train]
+output_dir = "outputs/sft"
+epochs = 2.0
+learning_rate = 1.0e-4
+lr_scheduler = "cosine"
+warmup_ratio = 0.03
+weight_decay = 0.0
+per_device_batch_size = 1
+gradient_accumulation_steps = 16
+gradient_checkpointing = true
+save_steps = 50  # a checkpoint every N optimiser steps; training resumes from the last one
+save_total_limit = 3
+eval_steps = 50
+logging_steps = 5
+max_grad_norm = 1.0
+seed = 1337
+
+[merge]
+adapter_dir = "outputs/sft/adapter"
+output_dir = "weights/emperor-4b-bf16"

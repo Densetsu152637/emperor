@@ -9,6 +9,8 @@ build/
 # Training outputs and data live on the Hugging Face Hub, not in Git.
 /outputs/
 /checkpoints/
-/data/cache/
+/data/
+/weights/
+/runs/
 *.gguf
 *.safetensors
