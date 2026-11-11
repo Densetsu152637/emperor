@@ -66,8 +66,10 @@ DEFAULT_JUDGE_GGUF = "D:/AI-Models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_
 TEACHER_SLOT, ENVIRONMENT_SLOT = 0, 1
 # The 65 GB teacher takes about 9 minutes to load from disk; the old 10-minute limit was too tight.
 SERVER_LOAD_SECONDS = 3600.0
-# No host-RAM prompt cache next to the 120B teacher: the machine has no RAM to spare for it.
-TEACHER_SERVER_ARGS = ["--cache-ram", "0"]
+# The 120B teacher does not fit in RAM beside Windows: its CPU experts (51 GB) are paged in from
+# disk on demand. No host-RAM prompt cache next to it, and no weight repacking, so every CPU
+# weight stays file-backed and the OS can drop and re-read pages instead of swapping copies.
+TEACHER_SERVER_ARGS = ["--cache-ram", "0", "--no-repack"]
 
 
 @dataclass

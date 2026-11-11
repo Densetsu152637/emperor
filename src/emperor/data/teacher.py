@@ -57,7 +57,9 @@ class ChatClient:
         base_url: str,
         model: str = TEACHER_MODEL,
         *,
-        timeout: float = 3600.0,
+        # A cold 120B teacher pages its experts in from disk: its first request has taken from
+        # 25 minutes to over an hour; later ones take seconds.
+        timeout: float = 10800.0,
         retries: int = 3,
         reasoning_effort: str | None = GENERATE_EFFORT,
         slot: int | None = None,
