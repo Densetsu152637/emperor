@@ -17,6 +17,7 @@ class ConfigError(ValueError):
 class ModelConfig:
     base: str = "D:/AI-Models/unsloth/Qwen3-4B-Instruct-2507"
     attn_implementation: str = "sdpa"
+    min_free_vram_gib: float = 13.5  # round 1 peaked at 12.7 GiB, plus the CUDA context
 
 
 @dataclass
