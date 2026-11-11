@@ -32,8 +32,16 @@ def require_local(base_url: str) -> str:
     return base_url.rstrip("/")
 
 
+# Generation runs the teacher at low effort: its reasoning is stored and trained on, and short
+# reasoning keeps traces within the student's training length. Judging keeps medium.
+GENERATE_EFFORT = "low"
+JUDGE_EFFORT = "medium"
+EFFORTS = ("low", "medium", "high")
+
+
 class ChatClient:
-    """Chat completions against a local llama-server. `chat` returns the response message."""
+    """Chat completions against a local llama-server. `chat` returns the response message,
+    with the reasoning in `reasoning_content` and the answer in `content`."""
 
     def __init__(
         self,
@@ -42,7 +50,7 @@ class ChatClient:
         *,
         timeout: float = 900.0,
         retries: int = 3,
-        reasoning_effort: str | None = "medium",
+        reasoning_effort: str | None = GENERATE_EFFORT,
     ):
         import httpx  # the `data` dependency group; imported lazily to keep the core light
 

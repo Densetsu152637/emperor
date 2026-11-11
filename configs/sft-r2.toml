@@ -3,7 +3,7 @@
 # Paths are relative to the repository root unless absolute. The base is read-only.
 
 [model]
-base = "D:/AI-Models/unsloth/Qwen3-4B-Instruct-2507"
+base = "D:/AI-Models/unsloth/Qwen3-4B-Thinking-2507"
 attn_implementation = "sdpa"  # flash-attn has no Windows wheel
 
 [data]

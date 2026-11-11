@@ -3,6 +3,12 @@
 The chat template renders each conversation once. Assistant turns are found by rendering the
 prefix up to each assistant message with and without the generation prompt, which needs no
 `{% generation %}` markers in the template; token labels are then taken from character offsets.
+
+A thinking base (Qwen3-*-Thinking) opens `<think>` in its generation prompt and renders an
+assistant turn's `reasoning_content` as `<think>...</think>` before the answer, but only for the
+turns after the last real user message (the current tool-call loop); earlier turns lose their
+reasoning. With such a base only those turns are trained, reasoning included, and a sample is
+skipped when any of them has no reasoning: it would teach the model to answer without thinking.
 """
 
 import hashlib
@@ -120,8 +126,78 @@ def labels_from_offsets(
     return labels
 
 
-def encode_sample(sample: dict, tokenizer, max_length: int) -> dict | None:
-    """Tokenise one sample; None when it is longer than `max_length` (never truncated)."""
+class MissingReasoning(ValueError):
+    """A turn that a thinking base would render with reasoning has none."""
+
+
+THINK_OPEN = "<think>"
+TOO_LONG = "too_long"
+NO_REASONING = "no_reasoning"
+NO_ASSISTANT_TOKENS = "no_assistant_tokens"
+
+
+def renders_thinking(render: Callable[..., str]) -> bool:
+    """True when the template's generation prompt opens a reasoning block (a thinking base)."""
+    prompt = render([{"role": "user", "content": "x"}], add_generation_prompt=True)
+    return prompt.rstrip().endswith(THINK_OPEN)
+
+
+def _is_query(message: dict) -> bool:
+    content = message.get("content")
+    return (
+        message.get("role") == "user"
+        and isinstance(content, str)
+        and not (content.startswith("<tool_response>") and content.endswith("</tool_response>"))
+    )
+
+
+def last_query_index(messages: list[dict]) -> int:
+    """Index of the last real user message, as Qwen3's template finds it (tool responses
+    wrapped as user text do not count); the last index when there is none."""
+    for index in range(len(messages) - 1, -1, -1):
+        if _is_query(messages[index]):
+            return index
+    return len(messages) - 1
+
+
+def has_reasoning(message: dict) -> bool:
+    reasoning = message.get("reasoning_content")
+    return isinstance(reasoning, str) and bool(reasoning.strip())
+
+
+def reasoning_spans(
+    messages: list[dict], render: Callable[..., str]
+) -> tuple[str, list[tuple[int, int]]]:
+    """Like `assistant_spans`, for a thinking template: the rendered conversation and the span
+    of every assistant turn after the last user query, from the first reasoning character
+    (the generation prompt already holds `<think>`) through the end-of-turn token.
+
+    Raises MissingReasoning when one of those turns has no `reasoning_content`.
+    """
+    query = last_query_index(messages)
+    trained = [
+        i for i, message in enumerate(messages) if message["role"] == "assistant" and i > query
+    ]
+    if any(not has_reasoning(messages[i]) for i in trained):
+        raise MissingReasoning("an assistant turn after the last user message has no reasoning")
+    full = render(messages, add_generation_prompt=False)
+    spans = []
+    for i in trained:
+        before = render(messages[:i], add_generation_prompt=True)
+        through = render(messages[: i + 1], add_generation_prompt=False).rstrip("\n")
+        if not through.startswith(before) or not full.startswith(through):
+            raise TemplateError(f"template is not prefix-consistent at message {i}")
+        spans.append((len(before), len(through)))
+    return full, spans
+
+
+def encode_sample(
+    sample: dict, tokenizer, max_length: int, *, thinking: bool | None = None
+) -> tuple[dict | None, str | None]:
+    """Tokenise one sample: (row, None), or (None, why it is skipped). Never truncated.
+
+    `thinking` says whether the base is a thinking model; None asks the chat template.
+    """
     tools = _tool_definitions(sample)
     messages = chat_messages(sample)
 
@@ -130,15 +206,23 @@ def encode_sample(sample: dict, tokenizer, max_length: int) -> dict | None:
             msgs, tools=tools, tokenize=False, add_generation_prompt=add_generation_prompt
         )
 
-    text, spans = assistant_spans(messages, render)
+    if thinking is None:
+        thinking = renders_thinking(render)
+    if thinking:
+        try:
+            text, spans = reasoning_spans(messages, render)
+        except MissingReasoning:
+            return None, NO_REASONING
+    else:
+        text, spans = assistant_spans(messages, render)
     encoded = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
     ids = list(encoded["input_ids"])
     if len(ids) > max_length:
-        return None
+        return None, TOO_LONG
     labels = labels_from_offsets(encoded["offset_mapping"], ids, spans)
     if all(label == IGNORE for label in labels):
-        return None
-    return {"input_ids": ids, "labels": labels, "attention_mask": [1] * len(ids)}
+        return None, NO_ASSISTANT_TOKENS
+    return {"input_ids": ids, "labels": labels, "attention_mask": [1] * len(ids)}, None
 
 
 def _tool_definitions(sample: dict) -> list[dict] | None:

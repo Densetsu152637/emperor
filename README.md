@@ -64,8 +64,10 @@ Phases (`--skip <phase>` skips one; every phase is resumable):
    target style: concise and structured, big picture first, delegates instead of pasting code,
    few emojis, no walls of tables, searches instead of recalling facts, never handles
    credentials. A separate "environment" call simulates the tool results. The stored sample keeps
-   only the plain Emperor prompt, so the style is learned rather than instructed.
-3. **judge**: the same model scores each trace 1-5 on eight criteria and answers pass or fail as
+   only the plain Emperor prompt, so the style is learned rather than instructed. Each assistant
+   turn keeps the teacher's reasoning for it as `reasoning_content`; the teacher runs at low
+   reasoning effort (`--reasoning-effort`) to keep traces short.
+3. **judge**: the same model (at `--judge-reasoning-effort`, default medium) scores each trace 1-5 on eight criteria and answers pass or fail as
    JSON. A trace is kept when the judge passes it, the mean is at least 4.0 (`--threshold`), no
    criterion is below 3, and the emoji, table and pasted-code checks are clean. Schema checks run
    first: tool calls validate against the vendored schemas, roles alternate, briefs have Goal and
@@ -73,8 +75,10 @@ Phases (`--skip <phase>` skips one; every phase is resumable):
    patterns).
 4. **filter**: writes `data/final/final.jsonl` and `data/report.json` (counts, pass rate, score
    histograms, rejection reasons).
-5. **train**: `configs/sft.toml`, bf16 LoRA on `D:\AI-Models\unsloth\Qwen3-4B-Instruct-2507`
-   with TRL, gradient checkpointing, assistant-only loss, sequence length 8192, no packing, a
+5. **train**: `configs/sft.toml`, bf16 LoRA on `D:\AI-Models\unsloth\Qwen3-4B-Thinking-2507`
+   with TRL, gradient checkpointing, assistant-only loss (the teacher's reasoning, rendered as the
+   template's `<think>` block, is trained too; samples without reasoning are skipped and counted
+   in the log), sequence length from the config, no packing, a
    checkpoint every 50 steps and resume from the last one. There is no QLoRA and no 4/8-bit
    loading; the config parser refuses such keys. The base directory is only read.
 6. **merge**: the adapter is merged into the base and saved as bf16 safetensors in

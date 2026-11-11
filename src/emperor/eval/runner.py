@@ -125,6 +125,10 @@ class ReplayEnvironment:
 
 def _assistant_message(reply: Reply) -> dict:
     message: dict = {"role": "assistant", "content": reply.content or ""}
+    if reply.reasoning:
+        # Sent back like the training data has it: a thinking model's template shows the
+        # reasoning of the turns since the user's message.
+        message["reasoning_content"] = reply.reasoning
     if reply.tool_calls:
         message["tool_calls"] = [
             {"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.arguments}}

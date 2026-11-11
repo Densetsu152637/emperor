@@ -165,3 +165,30 @@ def test_teacher_must_be_local():
     for url in ("https://api.openai.com/v1", "https://api.anthropic.com", "http://10.0.0.5:8080"):
         with pytest.raises(TeacherError):
             require_local(url)
+
+
+def test_teacher_reasoning_is_stored_per_turn_but_not_sent_back():
+    script = good_script()
+    script[0] = {**script[0], "reasoning_content": "  Delegate the work.  "}
+    script[2] = {**script[2], "reasoning_content": "Summarise the report."}
+    teacher = ScriptedTeacher(script)
+    sample, reason = generate_trace(record(), teacher, FakeEnv())
+    assert reason is None
+    turns = [m for m in sample["messages"] if m["role"] == "assistant"]
+    assert [t.get("reasoning_content") for t in turns] == [
+        "Delegate the work.",
+        None,
+        "Summarise the report.",
+    ]
+    history = teacher.seen[-1][0]
+    assert not any("reasoning_content" in m for m in history)
+
+
+def test_generation_defaults_to_low_reasoning_effort():
+    from emperor.data.cli import build_parser
+    from emperor.data.teacher import ChatClient
+
+    args = build_parser().parse_args(["retry"])
+    assert (args.reasoning_effort, args.judge_reasoning_effort) == ("low", "medium")
+    assert build_parser().parse_args(["judge"]).judge_reasoning_effort == "medium"
+    assert ChatClient.__init__.__kwdefaults__["reasoning_effort"] == "low"

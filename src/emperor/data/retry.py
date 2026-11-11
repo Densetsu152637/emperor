@@ -84,6 +84,7 @@ def run_retry_rounds(
     data_dir: Path,
     client: Chat,
     *,
+    judge_client: Chat | None = None,
     rounds: int = DEFAULT_RETRIES,
     config: GenerationConfig | None = None,
     threshold: float = MEAN_THRESHOLD,
@@ -91,6 +92,8 @@ def run_retry_rounds(
     log: Callable[[str], None] = lambda _: None,
 ) -> dict:
     """Regenerate and rejudge the prompts that failed, up to `rounds` times. Resumable.
+
+    `judge_client` (default: `client`) judges, so it can run at a different reasoning effort.
 
     Returns counts per round plus `stopped` (and `error`) when the server went away or the
     caller asked to stop; calling again continues where it left off.
@@ -113,7 +116,11 @@ def run_retry_rounds(
         judged = {"stopped": False}
         if not generated["stopped"]:
             judged = run_judging(
-                directory, client, threshold=threshold, should_stop=should_stop, log=log
+                directory,
+                judge_client or client,
+                threshold=threshold,
+                should_stop=should_stop,
+                log=log,
             )
         summary["rounds"][f"retry-{k}"] = {"prompts": count, "generate": generated, "judge": judged}
         for part in (generated, judged):

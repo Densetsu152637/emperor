@@ -23,7 +23,7 @@ from emperor.data.judge import run_judging
 from emperor.data.prompts import HeldoutIndex, generate_prompts, normalise
 from emperor.data.retry import prepare_round, round_dir, run_retry_rounds
 from emperor.data.shards import done_ids, iter_records, read_jsonl
-from emperor.data.teacher import ChatClient
+from emperor.data.teacher import GENERATE_EFFORT, JUDGE_EFFORT, ChatClient
 from emperor.eval.cli import CONTEXT_TIERS
 from emperor.export.gguf import DEFAULT_CACHE, gguf_dir_for, gguf_name
 from emperor.pipeline.idle import IdleGate, wait_until_idle
@@ -70,7 +70,8 @@ class Settings:
     teacher_port: int = 8081
     teacher_context: int = 32768
     parallel: int = 1
-    reasoning_effort: str = "medium"
+    reasoning_effort: str = GENERATE_EFFORT  # generation; the reasoning is trained on
+    judge_reasoning_effort: str = JUDGE_EFFORT
     llama_server: Path | None = None
     llama_cpp: Path | None = None
     llama_cache: Path = DEFAULT_CACHE
@@ -295,9 +296,17 @@ class Pipeline:
 
     def _teacher_work(self, kind: str):
         def work(server, should_stop):
+            url = f"http://127.0.0.1:{self.s.teacher_port}/v1"
             client = ChatClient(
-                f"http://127.0.0.1:{self.s.teacher_port}/v1",
-                reasoning_effort=self.s.reasoning_effort,
+                url,
+                reasoning_effort=(
+                    self.s.judge_reasoning_effort if kind == "judge" else self.s.reasoning_effort
+                ),
+            )
+            judge_client = (
+                ChatClient(url, reasoning_effort=self.s.judge_reasoning_effort)
+                if kind == "retry"
+                else None
             )
             try:
                 if kind == "generate":
@@ -313,6 +322,7 @@ class Pipeline:
                     counts = run_retry_rounds(
                         self.s.data_dir,
                         client,
+                        judge_client=judge_client,
                         rounds=self.s.retries,
                         config=self._generation_config(),
                         threshold=self.s.threshold,
@@ -329,6 +339,8 @@ class Pipeline:
                     )
             finally:
                 client.close()
+                if judge_client is not None:
+                    judge_client.close()
             log.info("%s: %s", kind, counts)
             return {**counts, "stopped": counts.get("stopped", False)}
 

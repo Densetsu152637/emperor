@@ -10,7 +10,14 @@ import time
 from pathlib import Path
 
 from emperor.train.config import SftConfig
-from emperor.train.data import encode_sample, load_combined, pad_batch, split_records
+from emperor.train.data import (
+    NO_REASONING,
+    encode_sample,
+    load_combined,
+    pad_batch,
+    renders_thinking,
+    split_records,
+)
 
 log = logging.getLogger("emperor.train")
 PAUSED_EXIT_CODE = 75  # EX_TEMPFAIL: a checkpoint was saved and the run should be resumed
@@ -81,22 +88,44 @@ def last_checkpoint(output_dir: Path) -> Path | None:
     return max(candidates, key=lambda p: int(p.name.split("-")[-1]), default=None)
 
 
+def base_thinks(tokenizer) -> bool:
+    """Whether the base is a thinking model, judged by its chat template."""
+    return renders_thinking(
+        lambda msgs, add_generation_prompt: tokenizer.apply_chat_template(
+            msgs, tokenize=False, add_generation_prompt=add_generation_prompt
+        )
+    )
+
+
 def prepare_datasets(config: SftConfig, tokenizer, root: Path):
     paths = [_resolve(p, root) for p in (config.data.path, *config.data.extra_paths)]
     records = load_combined(paths)
     train, val = split_records(records, config.data.val_fraction, config.data.split_seed)
+    thinking = base_thinks(tokenizer)
+    log.info(
+        "base is a %s model%s",
+        "thinking" if thinking else "non-thinking",
+        "; samples without reasoning are skipped" if thinking else "",
+    )
     encoded = {}
     for name, items in (("train", train), ("val", val)):
-        rows, skipped = [], 0
+        rows, skipped = [], {}
         for sample in items:
-            row = encode_sample(sample, tokenizer, config.data.max_length)
+            row, reason = encode_sample(
+                sample, tokenizer, config.data.max_length, thinking=thinking
+            )
             if row is None:
-                skipped += 1
+                skipped[reason] = skipped.get(reason, 0) + 1
             else:
                 rows.append(row)
-        log.info(
-            "%s: %d samples, %d skipped (too long or no assistant tokens)", name, len(rows), skipped
-        )
+        log.info("%s: %d samples, skipped %s", name, len(rows), skipped or "none")
+        if skipped.get(NO_REASONING):
+            log.warning(
+                "%s: %d samples have no teacher reasoning and are not trained on (a thinking "
+                "base must not learn to answer without thinking); regenerate them to use them",
+                name,
+                skipped[NO_REASONING],
+            )
         encoded[name] = rows
     if not encoded["train"]:
         raise SystemExit("no trainable samples; run the data pipeline first")

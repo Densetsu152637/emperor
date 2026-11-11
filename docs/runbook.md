@@ -31,7 +31,8 @@ stages out. Record each stage's outcome in the plan when it is done.
 | --- | --- |
 | Eval harness (stage 2b) | this repository, `uv run eval` |
 | Tool contract and prompts | vendored under `src/emperor/eval/vendor/` (pin in `SOURCE`) |
-| Lead base, bf16 | `D:/AI-Models/unsloth/Qwen3-4B-Instruct-2507/` |
+| Lead base, bf16 (thinking) | `D:/AI-Models/unsloth/Qwen3-4B-Thinking-2507/` |
+| Round 1 base, bf16 (non-thinking) | `D:/AI-Models/unsloth/Qwen3-4B-Instruct-2507/` |
 | Lead base, Q4_K_M GGUF | `D:/AI-Models/unsloth/Qwen3-4B-Instruct-2507-GGUF/` |
 | Fallback base, Q4_K_M GGUF | `D:/AI-Models/unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf` |
 | Local teacher, Q4_K_M GGUF | `D:/AI-Models/unsloth/gpt-oss-20b-GGUF/gpt-oss-20b-Q4_K_M.gguf` |

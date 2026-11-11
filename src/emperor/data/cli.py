@@ -14,6 +14,7 @@ from emperor.data.prompts import HeldoutIndex, generate_prompts, normalise
 from emperor.data.retry import DEFAULT_RETRIES, run_retry_rounds
 from emperor.data.schema import validate_sample
 from emperor.data.shards import iter_records, read_jsonl
+from emperor.data.teacher import EFFORTS, GENERATE_EFFORT, JUDGE_EFFORT
 
 DEFAULT_DATA_DIR = Path("data")
 DEFAULT_BASE_URL = "http://127.0.0.1:8081/v1"
@@ -36,8 +37,13 @@ def build_parser() -> argparse.ArgumentParser:
         p = sub.add_parser(name, help=f"{text} against a local llama-server")
         p.add_argument("--base-url", default=DEFAULT_BASE_URL)
         p.add_argument("--limit", type=int)
-        p.add_argument("--reasoning-effort", default="medium", choices=["low", "medium", "high"])
         if name in ("generate", "retry"):
+            p.add_argument(
+                "--reasoning-effort",
+                default=GENERATE_EFFORT,
+                choices=EFFORTS,
+                help="teacher effort while generating; its reasoning is stored in the traces",
+            )
             p.add_argument(
                 "--retries",
                 type=int,
@@ -51,6 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
             )
         if name in ("judge", "retry"):
             p.add_argument("--threshold", type=float, default=4.0)
+            p.add_argument("--judge-reasoning-effort", default=JUDGE_EFFORT, choices=EFFORTS)
 
     sub.add_parser("filter", help="keep judged passes in data/final/final.jsonl")
     sub.add_parser("report", help="write data/report.json")
@@ -102,10 +109,12 @@ def cmd_retry(args) -> int:
     from emperor.data.teacher import ChatClient
 
     client = ChatClient(args.base_url, reasoning_effort=args.reasoning_effort)
+    judge_client = ChatClient(args.base_url, reasoning_effort=args.judge_reasoning_effort)
     try:
         counts = run_retry_rounds(
             args.data_dir,
             client,
+            judge_client=judge_client,
             rounds=args.retries,
             config=generation_config(args),
             threshold=args.threshold,
@@ -113,6 +122,7 @@ def cmd_retry(args) -> int:
         )
     finally:
         client.close()
+        judge_client.close()
     print(json.dumps(counts))
     return 0
 
@@ -121,7 +131,7 @@ def cmd_judge(args) -> int:
     from emperor.data.judge import run_judging
     from emperor.data.teacher import ChatClient
 
-    client = ChatClient(args.base_url, reasoning_effort=args.reasoning_effort)
+    client = ChatClient(args.base_url, reasoning_effort=args.judge_reasoning_effort)
     try:
         counts = run_judging(
             args.data_dir,

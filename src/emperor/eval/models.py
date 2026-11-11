@@ -19,10 +19,34 @@ class ToolCall:
 
 @dataclass
 class Reply:
-    content: str | None
+    content: str | None  # the answer, with any thinking block removed
     tool_calls: list[ToolCall] = field(default_factory=list)
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    reasoning: str | None = None  # the model's thinking, kept apart from the answer
+
+
+THINK_OPEN = "<think>"
+THINK_CLOSE = "</think>"
+
+
+def split_thinking(content: str | None) -> tuple[str | None, str | None]:
+    """(reasoning, answer) from a reply that may still hold its thinking block.
+
+    A thinking model's generation prompt already opens `<think>`, so the text may hold only the
+    closing tag. Text that opens a block and never closes it (the model ran out of tokens) is
+    all reasoning and no answer.
+    """
+    if content is None:
+        return None, None
+    if THINK_CLOSE in content:
+        reasoning, answer = content.split(THINK_CLOSE, 1)
+        reasoning = reasoning.split(THINK_OPEN, 1)[-1]
+        return reasoning.strip() or None, answer.lstrip("\n")
+    stripped = content.lstrip()
+    if stripped.startswith(THINK_OPEN):
+        return stripped[len(THINK_OPEN) :].strip() or None, ""
+    return None, content
 
 
 class ModelError(RuntimeError):
@@ -48,7 +72,8 @@ class ScriptedModel:
 
     Each turn is `{"content": str}` and/or
     `{"tool_calls": [{"name": str, "arguments": dict | str}]}`; string arguments are passed
-    through verbatim so tests can script malformed calls. Once the script runs out the model
+    through verbatim so tests can script malformed calls. A `<think>` block in the content is
+    split off as the reply's reasoning, as for a served model. Once the script runs out the model
     answers with an empty message, which ends the episode.
     """
 
@@ -67,9 +92,10 @@ class ScriptedModel:
             calls.append(
                 ToolCall(id=f"call_{self.calls}_{i}", name=call["name"], arguments=arguments)
             )
-        content = turn.get("content")
+        reasoning, content = split_thinking(turn.get("content"))
         return Reply(
             content=content,
+            reasoning=reasoning,
             tool_calls=calls,
             prompt_tokens=_estimate_messages(messages),
             completion_tokens=estimate_tokens(content or "")
@@ -77,8 +103,17 @@ class ScriptedModel:
         )
 
 
+# A thinking model writes its reasoning before the answer or tool call; 4096 tokens cut some
+# replies off mid-thought.
+DEFAULT_MAX_TOKENS = 16384
+
+
 class OpenAICompatModel:
     """A chat-completions endpoint such as a llama.cpp or vLLM server.
+
+    The server normally returns a thinking model's reasoning in `reasoning_content`; when it
+    leaves the thinking block in `content` instead, it is split off here, so tool calls, routing
+    and the final answer are read from the answer alone.
 
     The API key, if any, comes from `EMPEROR_EVAL_API_KEY` and is only ever sent as a header.
     """
@@ -89,7 +124,7 @@ class OpenAICompatModel:
         model: str,
         *,
         timeout: float = 600.0,
-        max_tokens: int = 4096,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
         api_key: str | None = None,
     ):
         self.url = base_url.rstrip("/") + "/chat/completions"
@@ -135,8 +170,13 @@ class OpenAICompatModel:
             for i, call in enumerate(message.get("tool_calls") or [])
         ]
         usage = payload.get("usage") or {}
+        reasoning, content = split_thinking(message.get("content"))
+        served = message.get("reasoning_content")
+        if isinstance(served, str) and served.strip():
+            reasoning = served.strip() if reasoning is None else f"{served.strip()}\n{reasoning}"
         return Reply(
-            content=message.get("content"),
+            content=content,
+            reasoning=reasoning,
             tool_calls=calls,
             prompt_tokens=usage.get("prompt_tokens", _estimate_messages(messages)),
             completion_tokens=usage.get("completion_tokens", 0),

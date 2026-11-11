@@ -12,7 +12,7 @@ from pathlib import Path
 from emperor.export.gguf import gguf_dir_for
 from emperor.train.config import SftConfig
 
-BASE_MODEL = "Qwen/Qwen3-4B-Instruct-2507"
+BASE_MODEL = "Qwen/Qwen3-4B-Thinking-2507"
 # Typical bits per weight of llama.cpp types, used only when the file is not there to measure.
 BITS_PER_WEIGHT = {
     "bf16": 16.0,
@@ -133,7 +133,8 @@ def recipe(config: SftConfig, train_result: dict | None) -> str:
     lines = [
         f"- Base: `{BASE_MODEL}`, bf16 weights (never quantised during training).",
         "- Method: supervised fine-tuning with a bf16 LoRA adapter (no QLoRA, no 4/8-bit), "
-        "merged into the base afterwards; loss on assistant tokens only.",
+        "merged into the base afterwards; loss on assistant tokens only, including the "
+        "teacher's reasoning in each turn's thinking block (samples without it are skipped).",
         f"- LoRA: r={lo.r}, alpha={lo.alpha}, dropout={lo.dropout}, "
         f"targets {', '.join(lo.target_modules)}.",
         f"- Optimiser: AdamW, learning rate {t.learning_rate:g}, {t.lr_scheduler} schedule, "

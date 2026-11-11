@@ -153,7 +153,7 @@ def test_card_renders_every_section_from_a_sample_report():
         gguf_files=[{"type": "bf16", "file": "emperor-4b-bf16.gguf", "bytes": 8 * 2**30}],
     )
     text = card.render_card(inputs, "bf16")
-    assert text.startswith('---\nlicense: "apache-2.0"\nbase_model: "Qwen/Qwen3-4B-Instruct-2507"')
+    assert text.startswith('---\nlicense: "apache-2.0"\nbase_model: "Qwen/Qwen3-4B-Thinking-2507"')
     assert 'pipeline_tag: "text-generation"' in text
     assert "| tool_validity | G1 | 40 | 0.975 | 0.98 | no |" in text
     assert "| retrieval | G6 | 0 | n/a | n/a | n/a |" in text

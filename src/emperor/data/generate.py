@@ -2,7 +2,8 @@
 
 The teacher sees `emperor-root.md`, the brief/plan/questions shapes and the style requirements.
 The stored sample keeps only the plain system prompt (with the context-budget line), so the
-style is what the student learns rather than what it is told.
+style is what the student learns rather than what it is told. Each stored assistant turn keeps
+the teacher's reasoning for it as `reasoning_content` (the contract shared with Consul).
 """
 
 import json
@@ -181,6 +182,16 @@ def _normalise_calls(raw_calls: list[dict], counter: list[int]) -> list[dict]:
     return calls
 
 
+def with_reasoning(message: dict, reply: dict) -> dict:
+    """The stored turn: the message plus the teacher's reasoning for it (llama-server's
+    `reasoning_content`), which a thinking student is trained on. The teacher's own history
+    keeps the plain message, as in round 1."""
+    reasoning = reply.get("reasoning_content")
+    if not isinstance(reasoning, str) or not reasoning.strip():
+        return message
+    return {**message, "reasoning_content": reasoning.strip()}
+
+
 def generate_trace(
     record: PromptRecord,
     teacher: Chat,
@@ -227,7 +238,7 @@ def generate_trace(
         if calls:
             message["tool_calls"] = calls
         teacher_messages.append(message)
-        stored.append(message)
+        stored.append(with_reasoning(message, reply))
         if not calls:
             break
         for call in calls:
