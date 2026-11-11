@@ -30,6 +30,11 @@ train = [
     "datasets>=4.0",
     "accelerate>=1.10",
     "safetensors>=0.5",
+    # Qwen3.5's Gated DeltaNet layers: Triton kernels instead of the reference PyTorch loop
+    # (3x faster steps, 1.6 GiB less peak VRAM at 6144 tokens on the RTX 5080). On Windows,
+    # Triton comes from triton-windows, which bundles its own C compiler (TinyCC).
+    "flash-linear-attention>=0.6",
+    "triton-windows>=3.9,<3.10; sys_platform == 'win32'",
     # llama.cpp's convert_hf_to_gguf.py (GGUF export) imports these.
     "sentencepiece>=0.2",
     "protobuf>=4",

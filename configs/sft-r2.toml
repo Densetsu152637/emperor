@@ -9,7 +9,10 @@ attn_implementation = "sdpa"  # flash-attn has no Windows wheel
 [data]
 path = "data/r2/final/final.jsonl"
 extra_paths = ["data/final/final.jsonl"]  # round 1 kept samples, deduped by id
-max_length = 6144  # keeps ~87% of round 1 samples; 8192 overflowed the 16 GB card
+# Round 1 traces have no teacher reasoning: with a thinking base they are skipped (and counted in
+# the log) rather than teaching the model to answer without thinking.
+max_length = 8192  # reasoning adds tokens; Qwen3.5 with the Triton kernels peaks at 13.0 GiB here
+# (synthetic worst case, 87% of tokens in the loss; 4.3 s per micro-step), under the 14.1 GiB cap
 val_fraction = 0.05
 split_seed = 1337
 

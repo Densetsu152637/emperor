@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def test_shipped_config_loads_and_is_bf16_lora():
     config = load_config(ROOT / "configs" / "sft.toml")
     assert config.dtype == "bfloat16"
+    assert config.data.max_length == 8192
     assert config.model.base.endswith("Qwen3.5-4B")
     assert config.merge.output_dir == "weights/emperor-4b-bf16"
     assert config.train.save_steps > 0 and config.train.gradient_checkpointing
@@ -255,3 +256,38 @@ def test_encode_sample_puts_reasoning_in_the_labels_and_skips_samples_without_it
     # A non-thinking base trains reasoning-less samples as before.
     row, reason = encode_sample(make_sample(), CharTokenizer(fake_render), 100_000)
     assert reason is None and any(t != IGNORE for t in row["labels"])
+
+
+def test_fp32_base_tensors_are_found_under_text_model_names(tmp_path):
+    from emperor.train.sft import fp32_tensors, text_name
+
+    header = {
+        "__metadata__": {"format": "pt"},
+        "model.language_model.layers.0.linear_attn.A_log": {
+            "dtype": "F32",
+            "shape": [32],
+            "data_offsets": [0, 128],
+        },
+        "model.language_model.layers.0.mlp.up_proj.weight": {
+            "dtype": "BF16",
+            "shape": [1],
+            "data_offsets": [128, 130],
+        },
+        "mtp.norm.weight": {"dtype": "F32", "shape": [1], "data_offsets": [130, 134]},
+        "model.visual.blocks.0.norm1.bias": {
+            "dtype": "F32",
+            "shape": [1],
+            "data_offsets": [134, 138],
+        },
+    }
+    raw = json.dumps(header).encode()
+    shard = tmp_path / "model.safetensors"
+    shard.write_bytes(len(raw).to_bytes(8, "little") + raw + bytes(138))
+    found = fp32_tensors(tmp_path)
+    assert found == {
+        "model.layers.0.linear_attn.A_log": (
+            shard,
+            "model.language_model.layers.0.linear_attn.A_log",
+        )
+    }
+    assert text_name("model.layers.1.mlp.up_proj.weight") == "model.layers.1.mlp.up_proj.weight"
