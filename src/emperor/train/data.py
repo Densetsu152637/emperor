@@ -22,6 +22,18 @@ def load_records(path: Path | str) -> list[dict]:
     return records
 
 
+def load_combined(paths: Sequence[Path | str]) -> list[dict]:
+    """Samples from several files (one per data round), keeping the first of each sample id."""
+    seen: set[str] = set()
+    combined = []
+    for path in paths:
+        for record in load_records(path):
+            if record["id"] not in seen:
+                seen.add(record["id"])
+                combined.append(record)
+    return combined
+
+
 def split_records(
     records: Sequence[dict], val_fraction: float, seed: int
 ) -> tuple[list[dict], list[dict]]:

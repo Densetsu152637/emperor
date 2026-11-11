@@ -18,9 +18,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from emperor.data.build import filter_kept, write_report
-from emperor.data.generate import run_generation
+from emperor.data.generate import GenerationConfig, run_generation
 from emperor.data.judge import run_judging
 from emperor.data.prompts import HeldoutIndex, generate_prompts, normalise
+from emperor.data.retry import prepare_round, round_dir, run_retry_rounds
 from emperor.data.shards import done_ids, iter_records, read_jsonl
 from emperor.data.teacher import ChatClient
 from emperor.eval.cli import CONTEXT_TIERS
@@ -38,7 +39,18 @@ from emperor.train.config import SftConfig, load_config
 
 log = logging.getLogger("emperor.pipeline")
 PAUSED = 75
-PHASES = ["prompts", "generate", "judge", "filter", "train", "merge", "export", "eval", "card"]
+PHASES = [
+    "prompts",
+    "generate",
+    "judge",
+    "retry",
+    "filter",
+    "train",
+    "merge",
+    "export",
+    "eval",
+    "card",
+]
 DEFAULT_TEACHER_GGUF = "D:/AI-Models/unsloth/gpt-oss-20b-GGUF/gpt-oss-20b-Q4_K_M.gguf"
 
 
@@ -47,6 +59,9 @@ class Settings:
     root: Path
     run_dir: Path
     data_dir: Path
+    previous_data: list[Path] = field(default_factory=list)  # earlier rounds: no repeated prompts
+    retries: int = 2  # extra tries per prompt (schema failures in generation, judge failures)
+    force_first_tool: bool = True
     prompts: int = 2000
     seed: int = 1
     threshold: float = 4.0
@@ -257,18 +272,26 @@ class Pipeline:
 
     def phase_prompts(self) -> dict:
         path = self.s.data_dir / "prompts.jsonl"
-        existing = [normalise(r["text"]) for r in read_jsonl(path)] if path.exists() else []
-        need = self.s.prompts - len(existing)
+        own = [normalise(r["text"]) for r in read_jsonl(path)] if path.exists() else []
+        used = list(own)
+        for earlier in self.s.previous_data:  # an earlier round's prompts are never repeated
+            earlier_file = earlier / "prompts.jsonl"
+            if earlier_file.exists():
+                used += [normalise(r["text"]) for r in read_jsonl(earlier_file)]
+        need = self.s.prompts - len(own)
         if need > 0:
             records, stats = generate_prompts(
-                need, self.s.seed + len(existing), heldout=HeldoutIndex.bundled(), existing=existing
+                need, self.s.seed + len(own), heldout=HeldoutIndex.bundled(), existing=used
             )
             self.s.data_dir.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8", newline="\n") as handle:
                 for record in records:
                     handle.write(json.dumps(record.to_dict(), ensure_ascii=False) + "\n")
-            return {"status": "done", "prompts": len(existing) + len(records), **stats}
-        return {"status": "done", "prompts": len(existing)}
+            return {"status": "done", "prompts": len(own) + len(records), **stats}
+        return {"status": "done", "prompts": len(own)}
+
+    def _generation_config(self) -> GenerationConfig:
+        return GenerationConfig(retries=self.s.retries, force_first_tool=self.s.force_first_tool)
 
     def _teacher_work(self, kind: str):
         def work(server, should_stop):
@@ -282,6 +305,17 @@ class Pipeline:
                         self.s.data_dir / "prompts.jsonl",
                         self.s.data_dir,
                         client,
+                        config=self._generation_config(),
+                        should_stop=should_stop,
+                        log=log.debug,
+                    )
+                elif kind == "retry":
+                    counts = run_retry_rounds(
+                        self.s.data_dir,
+                        client,
+                        rounds=self.s.retries,
+                        config=self._generation_config(),
+                        threshold=self.s.threshold,
                         should_stop=should_stop,
                         log=log.debug,
                     )
@@ -330,6 +364,35 @@ class Pipeline:
             self.s.teacher_context,
             self._teacher_work("judge"),
         )
+
+    def phase_retry(self) -> dict:
+        """Regenerate and rejudge rejected prompts (new seeds), up to `retries` rounds."""
+        if self.s.retries <= 0:
+            return {"status": "skipped", "reason": "retries is 0"}
+        if self._retry_pending() == 0:
+            return {"status": "done", "note": "nothing left to retry"}
+        return self._server_phase(
+            "retry",
+            self.s.teacher_gguf,
+            self.s.teacher_port,
+            self.s.teacher_context,
+            self._teacher_work("retry"),
+        )
+
+    def _retry_pending(self) -> int:
+        """Work left in the retry rounds: unfinished rounds, or failures not yet retried."""
+        for k in range(1, self.s.retries + 1):
+            directory = round_dir(self.s.data_dir, k)
+            prompts = directory / "prompts.jsonl"
+            if not prompts.exists():
+                # Round k-1 must be complete before round k can be prepared.
+                if prepare_round(self.s.data_dir, k) == 0:
+                    return 0
+                prompts = directory / "prompts.jsonl"
+            finished = done_ids(directory / "rejects") | done_ids(directory / "judged")
+            if any(r["id"] not in finished for r in read_jsonl(prompts)):
+                return 1
+        return 0
 
     def phase_filter(self) -> dict:
         result = filter_kept(self.s.data_dir)
@@ -495,6 +558,7 @@ class Pipeline:
             ("prompts", self.phase_prompts),
             ("generate", self.phase_generate),
             ("judge", self.phase_judge),
+            ("retry", self.phase_retry),
             ("filter", self.phase_filter),
             ("train", self.phase_train),
             ("merge", self.phase_merge),

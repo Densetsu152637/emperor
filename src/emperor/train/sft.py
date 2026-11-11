@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 
 from emperor.train.config import SftConfig
-from emperor.train.data import encode_sample, load_records, pad_batch, split_records
+from emperor.train.data import encode_sample, load_combined, pad_batch, split_records
 
 log = logging.getLogger("emperor.train")
 PAUSED_EXIT_CODE = 75  # EX_TEMPFAIL: a checkpoint was saved and the run should be resumed
@@ -36,7 +36,8 @@ def last_checkpoint(output_dir: Path) -> Path | None:
 
 
 def prepare_datasets(config: SftConfig, tokenizer, root: Path):
-    records = load_records(_resolve(config.data.path, root))
+    paths = [_resolve(p, root) for p in (config.data.path, *config.data.extra_paths)]
+    records = load_combined(paths)
     train, val = split_records(records, config.data.val_fraction, config.data.split_seed)
     encoded = {}
     for name, items in (("train", train), ("val", val)):
