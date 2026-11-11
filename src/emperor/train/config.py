@@ -22,6 +22,7 @@ class ModelConfig:
 @dataclass
 class DataConfig:
     path: str = "data/final/final.jsonl"
+    extra_paths: list[str] = field(default_factory=list)  # more rounds, merged and deduped by id
     max_length: int = 8192
     val_fraction: float = 0.05
     split_seed: int = 1337

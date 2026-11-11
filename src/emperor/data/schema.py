@@ -14,6 +14,15 @@ _EMOJI = re.compile(
 )
 
 
+MAX_TABLE_ROWS = 4
+_TABLE_ROW = re.compile(r"\s*\|.*\|\s*$")
+
+
+def table_rows(text: str) -> int:
+    """Lines that look like rows of a Markdown table."""
+    return sum(1 for line in text.splitlines() if _TABLE_ROW.match(line))
+
+
 def count_emojis(text: str) -> int:
     return len(_EMOJI.findall(text))
 

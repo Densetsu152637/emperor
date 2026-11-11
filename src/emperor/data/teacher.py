@@ -51,6 +51,7 @@ class ChatClient:
         self.retries = retries
         self.reasoning_effort = reasoning_effort
         self._http = httpx.Client(timeout=timeout)
+        self.tool_choice_supported = True  # cleared once the server rejects `tool_choice`
 
     def close(self) -> None:
         self._http.close()
@@ -63,6 +64,7 @@ class ChatClient:
         temperature: float = 0.7,
         seed: int | None = None,
         max_tokens: int = 4096,
+        tool_choice: str | None = None,
     ) -> dict:
         body: dict = {
             "model": self.model,
@@ -74,6 +76,8 @@ class ChatClient:
             body["seed"] = seed
         if tools:
             body["tools"] = tools
+            if tool_choice and self.tool_choice_supported:
+                body["tool_choice"] = tool_choice
         if self.reasoning_effort:
             body["chat_template_kwargs"] = {"reasoning_effort": self.reasoning_effort}
         last: Exception | None = None
@@ -88,6 +92,11 @@ class ChatClient:
             except Exception as error:  # httpx errors; kept broad so one blip does not kill a run
                 last = error
                 status = getattr(getattr(error, "response", None), "status_code", None)
+                if "tool_choice" in body and status in (400, 422, 501):
+                    # The server cannot force a tool call: stop asking and carry on without.
+                    self.tool_choice_supported = False
+                    del body["tool_choice"]
+                    continue
                 if status is not None and status >= 500:
                     server_rejected += 1
             time.sleep(min(2**attempt, 10))

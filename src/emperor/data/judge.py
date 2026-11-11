@@ -7,15 +7,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from emperor.data.generate import Chat
-from emperor.data.schema import count_emojis
+from emperor.data.schema import MAX_TABLE_ROWS, count_emojis, table_rows
 from emperor.data.shards import ShardWriter, done_ids, iter_records
-from emperor.data.style import CRITERIA, judge_system
+from emperor.data.style import CRITERIA, NOT_APPLICABLE, judge_system
 from emperor.data.teacher import TEACHER_MODEL, TeacherError, TeacherOutputError
 
 MEAN_THRESHOLD = 4.0
 MIN_CRITERION = 3
 MAX_EMOJIS = 2
-MAX_TABLE_ROWS = 4
 MAX_CODE_LINES = 25
 _TOOL_RESULT_CHARS = 1200
 _TRANSCRIPT_CHARS = 28_000
@@ -31,10 +30,16 @@ class JudgeResult:
     passed: bool
     reason: str
     flags: list[str] = field(default_factory=list)
+    ignored: tuple[str, ...] = ()  # criteria that do not apply to this task class
+
+    @property
+    def applicable(self) -> dict[str, int]:
+        return {k: v for k, v in self.scores.items() if k not in self.ignored} or self.scores
 
     @property
     def mean(self) -> float:
-        return sum(self.scores.values()) / len(self.scores)
+        scores = self.applicable
+        return sum(scores.values()) / len(scores)
 
     def to_dict(self) -> dict:
         return {
@@ -43,6 +48,7 @@ class JudgeResult:
             "pass": self.passed,
             "reason": self.reason,
             "flags": self.flags,
+            "ignored": list(self.ignored),
         }
 
 
@@ -103,7 +109,7 @@ def heuristic_flags(sample: dict) -> list[str]:
     joined = "\n".join(texts)
     if count_emojis(joined) > MAX_EMOJIS:
         flags.append("emojis")
-    if sum(1 for line in joined.splitlines() if re.match(r"\s*\|.*\|\s*$", line)) > MAX_TABLE_ROWS:
+    if table_rows(joined) > MAX_TABLE_ROWS:
         flags.append("tables")
     final = texts[-1] if texts else ""
     code = 0
@@ -121,7 +127,7 @@ def decide(result: JudgeResult, threshold: float = MEAN_THRESHOLD) -> tuple[bool
         reasons.append("judge_fail")
     if result.mean < threshold:
         reasons.append("below_threshold")
-    low = [name for name, score in result.scores.items() if score < MIN_CRITERION]
+    low = [name for name, score in result.applicable.items() if score < MIN_CRITERION]
     reasons += [f"low_{name}" for name in low]
     return not reasons, reasons
 
@@ -149,20 +155,38 @@ def render_transcript(sample: dict) -> str:
     return text
 
 
+_STRICT_JSON = (
+    "\n\nYour previous answer was not valid JSON. Reply with exactly one JSON object and "
+    "nothing else: no prose before or after, no code fence, no thinking out loud. Use the keys "
+    '"scores" (all eight criteria, integers 1-5), "pass" (true or false) and "reason".'
+)
+# First try warm and short; the retry is cold, stricter about the format and has room to finish.
+_JUDGE_TRIES = ((0.2, 2048, ""), (0.0, 3072, _STRICT_JSON))
+
+
 def judge_sample(sample: dict, client: Chat, *, seed: int = 0, attempts: int = 2) -> JudgeResult:
-    messages = [
-        {"role": "system", "content": judge_system()},
-        {"role": "user", "content": "Transcript to score:\n\n" + render_transcript(sample)},
-    ]
+    """Score one trace; an unparseable answer is retried with a lower temperature and a
+    stricter JSON instruction before giving up."""
+    task_class = sample.get("task_class")
+    system = judge_system(task_class)
+    transcript = "Transcript to score:\n\n" + render_transcript(sample)
     last: Exception | None = None
     for attempt in range(attempts):
-        reply = client.chat(messages, temperature=0.0, seed=seed + attempt, max_tokens=1024)
+        temperature, max_tokens, suffix = _JUDGE_TRIES[min(attempt, len(_JUDGE_TRIES) - 1)]
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": transcript + suffix},
+        ]
+        reply = client.chat(
+            messages, temperature=temperature, seed=seed + attempt, max_tokens=max_tokens
+        )
         try:
             result = parse_judge_output(reply.get("content") or "")
         except JudgeParseError as error:
             last = error
             continue
         result.flags = heuristic_flags(sample)
+        result.ignored = NOT_APPLICABLE.get(task_class or "", ())
         return result
     raise JudgeParseError(str(last))
 

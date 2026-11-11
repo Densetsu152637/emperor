@@ -11,6 +11,7 @@ from pathlib import Path
 
 from emperor.data.build import filter_kept, write_report
 from emperor.data.prompts import HeldoutIndex, generate_prompts, normalise
+from emperor.data.retry import DEFAULT_RETRIES, run_retry_rounds
 from emperor.data.schema import validate_sample
 from emperor.data.shards import iter_records, read_jsonl
 
@@ -27,12 +28,28 @@ def build_parser() -> argparse.ArgumentParser:
     prompts.add_argument("--count", type=int, default=2000)
     prompts.add_argument("--seed", type=int, default=1)
 
-    for name, text in (("generate", "teacher traces"), ("judge", "score traces")):
+    for name, text in (
+        ("generate", "teacher traces"),
+        ("judge", "score traces"),
+        ("retry", "regenerate and rejudge the prompts that were rejected"),
+    ):
         p = sub.add_parser(name, help=f"{text} against a local llama-server")
         p.add_argument("--base-url", default=DEFAULT_BASE_URL)
         p.add_argument("--limit", type=int)
         p.add_argument("--reasoning-effort", default="medium", choices=["low", "medium", "high"])
-        if name == "judge":
+        if name in ("generate", "retry"):
+            p.add_argument(
+                "--retries",
+                type=int,
+                default=DEFAULT_RETRIES,
+                help="extra tries per prompt (new seed) after a failed schema check or judgement",
+            )
+            p.add_argument(
+                "--no-force-tool",
+                action="store_true",
+                help="do not send tool_choice=required on the first turn",
+            )
+        if name in ("judge", "retry"):
             p.add_argument("--threshold", type=float, default=4.0)
 
     sub.add_parser("filter", help="keep judged passes in data/final/final.jsonl")
@@ -65,7 +82,33 @@ def cmd_generate(args) -> int:
             args.data_dir / "prompts.jsonl",
             args.data_dir,
             client,
+            config=generation_config(args),
             limit=args.limit,
+            log=lambda line: print(line, file=sys.stderr),
+        )
+    finally:
+        client.close()
+    print(json.dumps(counts))
+    return 0
+
+
+def generation_config(args):
+    from emperor.data.generate import GenerationConfig
+
+    return GenerationConfig(retries=args.retries, force_first_tool=not args.no_force_tool)
+
+
+def cmd_retry(args) -> int:
+    from emperor.data.teacher import ChatClient
+
+    client = ChatClient(args.base_url, reasoning_effort=args.reasoning_effort)
+    try:
+        counts = run_retry_rounds(
+            args.data_dir,
+            client,
+            rounds=args.retries,
+            config=generation_config(args),
+            threshold=args.threshold,
             log=lambda line: print(line, file=sys.stderr),
         )
     finally:
@@ -116,6 +159,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_generate(args)
     if args.command == "judge":
         return cmd_judge(args)
+    if args.command == "retry":
+        return cmd_retry(args)
     if args.command == "filter":
         print(json.dumps(filter_kept(args.data_dir)))
         return 0

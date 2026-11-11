@@ -15,9 +15,11 @@ class ScriptedTeacher:
     def __init__(self, turns):
         self.turns = list(turns)
         self.seen = []
+        self.kwargs = []
 
     def chat(self, messages, *, tools=None, **kwargs):
         self.seen.append((list(messages), tools))
+        self.kwargs.append(kwargs)
         if not self.turns:
             raise TeacherError("out of script")
         return self.turns.pop(0)
@@ -133,7 +135,9 @@ def test_generation_is_resumable_and_keeps_rejections(tmp_path):
         for i in range(3):
             handle.write(json.dumps(record(id=f"p-{i}").to_dict()) + "\n")
     teacher = ScriptedTeacher(good_script() + [{"content": ""}])
-    counts = run_generation(prompts, tmp_path, teacher, FakeEnv(), limit=2)
+    counts = run_generation(
+        prompts, tmp_path, teacher, FakeEnv(), config=GenerationConfig(retries=0), limit=2
+    )
     assert counts["accepted"] == 1 and counts["rejected"] == 1
     assert done_ids(tmp_path / "traces") == {"p-0"}
     assert done_ids(tmp_path / "rejects") == {"p-1"}

@@ -7,12 +7,12 @@ style is what the student learns rather than what it is told.
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
 from emperor.data.prompts import PromptRecord
-from emperor.data.schema import LICENCE, validate_sample
+from emperor.data.schema import LICENCE, MAX_TABLE_ROWS, table_rows, validate_sample
 from emperor.data.shards import ShardWriter, done_ids, read_jsonl
 from emperor.data.style import STYLE
 from emperor.data.teacher import TEACHER_MODEL, TeacherError, TeacherOutputError
@@ -28,6 +28,7 @@ class Chat(Protocol):
         temperature: float = ...,
         seed: int | None = ...,
         max_tokens: int = ...,
+        tool_choice: str | None = ...,
     ) -> dict: ...
 
 
@@ -37,6 +38,17 @@ class GenerationConfig:
     temperature: float = 0.7
     max_tokens: int = 4096
     teacher_model: str = TEACHER_MODEL
+    retries: int = 2  # extra tries (new seed) when a trace fails the schema check
+    force_first_tool: bool = True  # tool_choice "required" on the first turn
+    direct_classes: frozenset[str] = field(default_factory=lambda: DIRECT_CLASSES)
+    attempt: int = 0  # which retry round this run belongs to (0 is the first pass)
+
+
+# Classes where answering without any tool is the right behaviour.
+DIRECT_CLASSES = frozenset({"quick_answer"})
+ATTEMPT_SEED_STEP = 1_000_003
+ROUND_SEED_STEP = 7_000_001
+SEED_MASK = 0x7FFFFFFF
 
 
 def teacher_system(context_tokens: int) -> str:
@@ -174,12 +186,19 @@ def generate_trace(
     teacher: Chat,
     environment_client: Chat,
     config: GenerationConfig | None = None,
+    *,
+    attempt: int = 0,
 ) -> tuple[dict | None, str | None]:
-    """Play one prompt to the end; returns (sample, None) or (None, rejection reason)."""
+    """Play one prompt to the end; returns (sample, None) or (None, rejection reason).
+
+    `attempt` shifts every seed, so a retry of the same prompt takes a different path.
+    """
     config = config or GenerationConfig()
+    base_seed = (record.seed + attempt * ATTEMPT_SEED_STEP) & SEED_MASK
+    requires_tools = record.task_class not in config.direct_classes
     context_tokens = record.context_budget_k * 1024
     tools = openai_tools(record.tools)
-    env = Environment(environment_client, record.text, record.seed)
+    env = Environment(environment_client, record.text, base_seed)
     teacher_messages = [
         {"role": "system", "content": teacher_system(context_tokens)},
         {"role": "user", "content": record.text},
@@ -190,12 +209,15 @@ def generate_trace(
     ]
     counter = [0]
     for turn in range(config.max_turns):
+        force = turn == 0 and requires_tools and config.force_first_tool
+        extra = {"tool_choice": "required"} if force else {}
         reply = teacher.chat(
             teacher_messages,
             tools=tools,
             temperature=config.temperature,
-            seed=record.seed + turn,
+            seed=(base_seed + turn) & SEED_MASK,
             max_tokens=config.max_tokens,
+            **extra,
         )
         content = (reply.get("content") or "").strip()
         calls = _normalise_calls(reply.get("tool_calls") or [], counter)
@@ -220,6 +242,11 @@ def generate_trace(
     else:
         return None, "turn_limit"
 
+    if requires_tools and not any(m.get("tool_calls") for m in stored[2:]):
+        return None, "no_tool_use"
+    if table_rows("\n".join(m.get("content") or "" for m in stored[2:])) > MAX_TABLE_ROWS:
+        return None, "markdown_table"
+
     sample = {
         "id": record.id,
         "task_class": record.task_class,
@@ -230,14 +257,36 @@ def generate_trace(
         "meta": {
             "teacher": config.teacher_model,
             "licence": LICENCE,
-            "seed": record.seed,
+            "seed": base_seed,
             "host": "local llama.cpp",
+            "attempt": config.attempt,
         },
     }
     check = validate_sample(sample)
     if not check.ok:
         return None, check.reasons[0]
     return sample, None
+
+
+def _sample_with_retries(
+    record: PromptRecord, teacher: Chat, env_client: Chat, config: GenerationConfig
+) -> tuple[dict | None, str | None, list[str]]:
+    """Try the prompt up to `1 + retries` times; returns (sample, last reason, failed reasons)."""
+    failures: list[str] = []
+    reason: str | None = None
+    for attempt in range(config.retries + 1):
+        try:
+            sample, reason = generate_trace(record, teacher, env_client, config, attempt=attempt)
+        except TeacherOutputError:
+            sample, reason = None, "teacher_output_unparsable"
+        except TeacherError:
+            raise
+        except Exception as error:  # one bad sample must not end an overnight run
+            sample, reason = None, f"error:{type(error).__name__}"
+        if sample:
+            return sample, None, failures
+        failures.append(reason or "unknown")
+    return None, reason, failures
 
 
 def run_generation(
@@ -256,6 +305,7 @@ def run_generation(
     Accepted samples go to `out_dir/traces`, rejections (with reasons) to `out_dir/rejects`; both
     count as done. Returns counts and whether the run stopped early.
     """
+    config = config or GenerationConfig()
     traces = ShardWriter(out_dir / "traces", "traces")
     rejects = ShardWriter(out_dir / "rejects", "rejects")
     finished = done_ids(out_dir / "traces") | done_ids(out_dir / "rejects")
@@ -269,21 +319,28 @@ def run_generation(
             counts["stopped"] = True
             break
         try:
-            sample, reason = generate_trace(record, teacher, env_client, config)
-        except TeacherOutputError:
-            sample, reason = None, "teacher_output_unparsable"
+            sample, reason, failures = _sample_with_retries(record, teacher, env_client, config)
         except TeacherError as error:
             # The server is gone (paused, crashed): leave the id undone and let the caller retry.
             counts["stopped"] = True
             counts["error"] = str(error)
             break
-        except Exception as error:  # one bad sample must not end an overnight run
-            sample, reason = None, f"error:{type(error).__name__}"
         if sample:
+            sample["meta"]["attempts"] = len(failures) + 1
+            if failures:
+                sample["meta"]["attempt_failures"] = failures
             traces.write(sample)
             counts["accepted"] += 1
         else:
-            rejects.write({"id": record.id, "task_class": record.task_class, "reason": reason})
+            rejects.write(
+                {
+                    "id": record.id,
+                    "task_class": record.task_class,
+                    "reason": reason,
+                    "attempts": len(failures),
+                    "attempt_failures": failures,
+                }
+            )
             counts["rejected"] += 1
         log(f"{record.id} {'ok' if sample else reason}")
     return counts

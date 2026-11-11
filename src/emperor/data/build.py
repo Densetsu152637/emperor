@@ -4,8 +4,16 @@ import json
 from collections import Counter
 from pathlib import Path
 
+from emperor.data.retry import retry_dirs
 from emperor.data.schema import validate_sample
 from emperor.data.shards import iter_records, shard_files
+
+
+def iter_judged(data_dir: Path):
+    """Judged samples of the first pass, then of each retry round (a kept id is used once)."""
+    yield from iter_records(data_dir / "judged")
+    for directory in retry_dirs(data_dir):
+        yield from iter_records(directory / "judged")
 
 
 def filter_kept(data_dir: Path) -> dict:
@@ -17,7 +25,7 @@ def filter_kept(data_dir: Path) -> dict:
     kept = dropped = 0
     temporary = target.with_suffix(".tmp")
     with temporary.open("w", encoding="utf-8", newline="\n") as handle:
-        for sample in iter_records(data_dir / "judged"):
+        for sample in iter_judged(data_dir):
             judge = sample.get("meta", {}).get("judge", {})
             if not judge.get("keep") or sample["id"] in seen or not validate_sample(sample).ok:
                 dropped += 1
@@ -54,6 +62,14 @@ def build_report(data_dir: Path) -> dict:
             rejection[reason] += 1
     generation_rejects = Counter(r.get("reason", "unknown") for r in rejects)
     kept = sum(kept_by_class.values())
+    retries = {}
+    for directory in retry_dirs(data_dir):
+        rows = list(iter_records(directory / "judged"))
+        retries[directory.name] = {
+            "judged": len(rows),
+            "kept": sum(1 for r in rows if r["meta"].get("judge", {}).get("keep")),
+        }
+    kept_total = kept + sum(r["kept"] for r in retries.values())
     return {
         "prompts": prompts,
         "generated": len(traces),
@@ -69,6 +85,8 @@ def build_report(data_dir: Path) -> dict:
             for name in sorted(histograms)
         },
         "judge_rejection_reasons": dict(rejection.most_common()),
+        "retry_rounds": retries,
+        "kept_with_retries": kept_total,
         "teacher": "gpt-oss-20b",
         "licence": "Apache-2.0",
         "shards": {

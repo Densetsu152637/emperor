@@ -89,6 +89,32 @@ Phases (`--skip <phase>` skips one; every phase is resumable):
 9. **card**: writes the Hugging Face `README.md` into `weights/emperor-4b-bf16/` and the GGUF
    directory (see Release).
 
+### Teacher yield and extra rounds
+
+- **Forced tools.** For every task class except `quick_answer` the first assistant turn is sent
+  with `tool_choice: "required"` (llama-server with `--jinja`); if the server rejects it the
+  client stops sending it. The style prompt tells the teacher to plan, research and delegate for
+  anything non-trivial and never to use Markdown tables. A trace with no tool call (outside
+  `quick_answer`) or with a table of more than four rows is rejected at generation.
+- **Rejection sampling.** A prompt that fails the schema check is retried in place up to
+  `--retries` times (default 2) with a different seed; `meta.attempts` and
+  `meta.attempt_failures` record it. The new **retry** phase (after judge) regenerates prompts the
+  judge rejected into `data/retry-1/`, `data/retry-2/` (same layout, new seeds) and judges them;
+  the first pass is never overwritten and `filter` keeps the earliest kept sample per prompt.
+  `--retries 0` turns both off. Standalone: `data retry`.
+- **Judge.** An unparseable answer is retried once, colder and with a stricter JSON instruction.
+  Criteria that cannot apply are ignored for `quick_answer` (delegation, tool use, research,
+  planning) and `clarify` (delegation, research); the judge prompt says so too.
+- **Another round without losing the first.** `--data-dir data/r2` puts a round in its own
+  directory, `--previous-data data` keeps its prompts distinct from earlier rounds, and
+  `configs/sft-r2.toml` trains from scratch (own output and weights dirs) on round 2's kept samples
+  plus round 1's (`[data] extra_paths`, deduplicated by sample id):
+
+```powershell
+uv run --group data --group train pipeline --detach --asleep --data-dir data/r2 `
+  --previous-data data --train-config configs/sft-r2.toml --seed 2 --prompts 2000
+```
+
 `--only <phase>` (repeatable) runs just those phases of a run directory and leaves the rest of
 its state alone. To export and write cards for a run that already finished:
 
@@ -98,7 +124,7 @@ uv run --group train pipeline --detach --resume runs/<timestamp> --only export -
 
 Samples are append-only JSONL shards under `data/` (`traces/`, `rejects/`, `judged/`, `final/`).
 Each records its teacher (`gpt-oss-20b`), licence (`Apache-2.0`), seed and judge scores. The
-steps can also be run alone: `uv run --group data data {prompts,generate,judge,filter,report,validate}`
+steps can also be run alone: `uv run --group data data {prompts,generate,judge,retry,filter,report,validate}`
 and `uv run --group train train {show,fit,merge}`.
 
 ### Idle gate

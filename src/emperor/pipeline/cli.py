@@ -62,6 +62,28 @@ def build_parser(prog: str = "pipeline", description: str | None = None) -> argp
     idle.add_argument("--poll-seconds", type=float, default=30.0)
 
     data = parser.add_argument_group("data")
+    data.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path("data"),
+        help="where this round's prompts, traces and judgements live (relative to --root)",
+    )
+    data.add_argument(
+        "--previous-data",
+        type=Path,
+        action="append",
+        default=[],
+        help="an earlier round's data dir whose prompts must not be repeated (repeatable)",
+    )
+    data.add_argument(
+        "--retries",
+        type=int,
+        default=2,
+        help="extra tries per prompt (new seed) after a failed schema check or judgement",
+    )
+    data.add_argument(
+        "--no-force-tool", action="store_true", help="no tool_choice=required on the first turn"
+    )
     data.add_argument("--prompts", type=int, default=2000, help="user requests to generate")
     data.add_argument("--seed", type=int, default=1)
     data.add_argument("--threshold", type=float, default=4.0, help="minimum mean judge score")
@@ -92,7 +114,10 @@ def settings_from(args, run_dir: Path) -> Settings:
     return Settings(
         root=root,
         run_dir=run_dir,
-        data_dir=root / "data",
+        data_dir=root / args.data_dir,
+        previous_data=[root / p for p in args.previous_data],
+        retries=args.retries,
+        force_first_tool=not args.no_force_tool,
         prompts=args.prompts,
         seed=args.seed,
         threshold=args.threshold,
