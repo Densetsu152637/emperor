@@ -10,7 +10,14 @@ import time
 from pathlib import Path
 
 from emperor.train.config import SftConfig
-from emperor.train.data import encode_sample, load_combined, pad_batch, split_records
+from emperor.train.data import (
+    NO_REASONING,
+    encode_sample,
+    load_combined,
+    pad_batch,
+    renders_thinking,
+    split_records,
+)
 
 log = logging.getLogger("emperor.train")
 PAUSED_EXIT_CODE = 75  # EX_TEMPFAIL: a checkpoint was saved and the run should be resumed
@@ -60,6 +67,47 @@ def shrink_logprob_tiles(tokens: int = 1024) -> None:
     chunked_logprob.TOKEN_CHUNK_SIZE = tokens
 
 
+def text_name(key: str) -> str:
+    """A checkpoint key as the text-only model names it (multimodal checkpoints nest the
+    language model under `model.language_model.`)."""
+    return key.replace("model.language_model.", "model.", 1)
+
+
+def fp32_tensors(base: Path) -> dict[str, tuple[Path, str]]:
+    """Language-model tensors the base checkpoint stores in fp32 (Qwen3.5 keeps its Gated DeltaNet
+    decay `A_log` and gated-norm weights in fp32), by text-model name -> (shard, key)."""
+    found = {}
+    for shard in sorted(base.glob("*.safetensors")):
+        with shard.open("rb") as handle:
+            size = int.from_bytes(handle.read(8), "little")
+            header = json.loads(handle.read(size))
+        for key, info in header.items():
+            if key == "__metadata__" or info.get("dtype") != "F32":
+                continue
+            if key.startswith(("mtp.", "model.visual.")):
+                continue
+            found[text_name(key)] = (shard, key)
+    return found
+
+
+def restore_fp32(model, base: Path) -> int:
+    """Put back, in fp32, the frozen tensors that loading in bf16 rounded; returns how many.
+    The model's own forward casts them where it mixes them with bf16 activations."""
+    from safetensors import safe_open
+
+    params = dict(model.named_parameters())
+    restored = 0
+    for name, (shard, key) in fp32_tensors(base).items():
+        param = params.get(name)
+        if param is None:
+            continue
+        with safe_open(str(shard), framework="pt") as handle:
+            # A copy: on the CPU the tensor would otherwise map the file closed below.
+            param.data = handle.get_tensor(key).to(param.device, copy=True)
+        restored += 1
+    return restored
+
+
 def log_placement(model) -> None:
     """Say where the weights went."""
     devices: dict[str, int] = {}
@@ -81,22 +129,44 @@ def last_checkpoint(output_dir: Path) -> Path | None:
     return max(candidates, key=lambda p: int(p.name.split("-")[-1]), default=None)
 
 
+def base_thinks(tokenizer) -> bool:
+    """Whether the base is a thinking model, judged by its chat template."""
+    return renders_thinking(
+        lambda msgs, add_generation_prompt: tokenizer.apply_chat_template(
+            msgs, tokenize=False, add_generation_prompt=add_generation_prompt
+        )
+    )
+
+
 def prepare_datasets(config: SftConfig, tokenizer, root: Path):
     paths = [_resolve(p, root) for p in (config.data.path, *config.data.extra_paths)]
     records = load_combined(paths)
     train, val = split_records(records, config.data.val_fraction, config.data.split_seed)
+    thinking = base_thinks(tokenizer)
+    log.info(
+        "base is a %s model%s",
+        "thinking" if thinking else "non-thinking",
+        "; samples without reasoning are skipped" if thinking else "",
+    )
     encoded = {}
     for name, items in (("train", train), ("val", val)):
-        rows, skipped = [], 0
+        rows, skipped = [], {}
         for sample in items:
-            row = encode_sample(sample, tokenizer, config.data.max_length)
+            row, reason = encode_sample(
+                sample, tokenizer, config.data.max_length, thinking=thinking
+            )
             if row is None:
-                skipped += 1
+                skipped[reason] = skipped.get(reason, 0) + 1
             else:
                 rows.append(row)
-        log.info(
-            "%s: %d samples, %d skipped (too long or no assistant tokens)", name, len(rows), skipped
-        )
+        log.info("%s: %d samples, skipped %s", name, len(rows), skipped or "none")
+        if skipped.get(NO_REASONING):
+            log.warning(
+                "%s: %d samples have no teacher reasoning and are not trained on (a thinking "
+                "base must not learn to answer without thinking); regenerate them to use them",
+                name,
+                skipped[NO_REASONING],
+            )
         encoded[name] = rows
     if not encoded["train"]:
         raise SystemExit("no trainable samples; run the data pipeline first")
@@ -129,6 +199,7 @@ def train(config: SftConfig, root: Path, pause_file: Path | None = None) -> int:
         device_map={"": 0},
     )
     log_placement(model)
+    log.info("fp32 tensors restored from the base: %d", restore_fp32(model, base))
     model.config.use_cache = False
     if config.train.gradient_checkpointing:
         model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
@@ -253,7 +324,8 @@ def _peak_gib(torch) -> float:
 
 
 def merge(config: SftConfig, root: Path) -> Path:
-    """Merge the LoRA adapter into the bf16 base and save bf16 safetensors."""
+    """Merge the LoRA adapter into the bf16 base and save bf16 safetensors (plus the few
+    tensors the base itself keeps in fp32). The output is the text model only."""
     import torch
     from peft import PeftModel
     from safetensors import safe_open
@@ -268,13 +340,15 @@ def merge(config: SftConfig, root: Path) -> Path:
         raise SystemExit("refusing to write inside the base model directory")
     model = AutoModelForCausalLM.from_pretrained(base, dtype=torch.bfloat16, device_map={"": "cpu"})
     merged = PeftModel.from_pretrained(model, str(adapter)).merge_and_unload()
+    restore_fp32(merged, base)  # untouched by LoRA: kept exactly as the base ships them
     out.mkdir(parents=True, exist_ok=True)
     merged.save_pretrained(str(out), safe_serialization=True, max_shard_size="4GB")
     AutoTokenizer.from_pretrained(base).save_pretrained(str(out))
+    kept_fp32 = set(fp32_tensors(base))
     for shard in sorted(out.glob("*.safetensors")):
         with safe_open(str(shard), framework="pt") as handle:
             for key in handle.keys():  # noqa: SIM118
                 dtype = handle.get_slice(key).get_dtype()
-                if dtype != "BF16":
+                if dtype != "BF16" and not (dtype == "F32" and text_name(key) in kept_fp32):
                     raise SystemExit(f"{shard.name}:{key} is {dtype}, expected BF16")
     return out

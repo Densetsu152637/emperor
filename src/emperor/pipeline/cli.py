@@ -16,6 +16,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from emperor.data.teacher import EFFORTS, ENVIRONMENT_EFFORT, GENERATE_EFFORT, JUDGE_EFFORT
 from emperor.eval.cli import CONTEXT_TIERS
 from emperor.export.gguf import DEFAULT_CACHE
 from emperor.pipeline.idle import (
@@ -92,7 +93,19 @@ def build_parser(prog: str = "pipeline", description: str | None = None) -> argp
     data.add_argument("--teacher-port", type=int, default=8081)
     data.add_argument("--teacher-context", type=int, default=32768, help="tokens per slot")
     data.add_argument("--parallel", type=int, default=1, help="llama-server slots")
-    data.add_argument("--reasoning-effort", default="medium", choices=["low", "medium", "high"])
+    data.add_argument(
+        "--reasoning-effort",
+        default=GENERATE_EFFORT,
+        choices=EFFORTS,
+        help="teacher effort while generating; its reasoning is stored in the traces",
+    )
+    data.add_argument("--judge-reasoning-effort", default=JUDGE_EFFORT, choices=EFFORTS)
+    data.add_argument(
+        "--environment-reasoning-effort",
+        default=ENVIRONMENT_EFFORT,
+        choices=EFFORTS,
+        help="effort of the call that simulates tool results",
+    )
     data.add_argument(
         "--llama-server", type=Path, help="default: EMPEROR_LLAMA_SERVER, PATH, Imperium"
     )
@@ -127,6 +140,8 @@ def settings_from(args, run_dir: Path) -> Settings:
         teacher_context=args.teacher_context,
         parallel=args.parallel,
         reasoning_effort=args.reasoning_effort,
+        judge_reasoning_effort=args.judge_reasoning_effort,
+        environment_reasoning_effort=args.environment_reasoning_effort,
         llama_server=args.llama_server,
         llama_cpp=args.llama_cpp,
         llama_cache=args.llama_cache,

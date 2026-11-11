@@ -12,7 +12,7 @@ from pathlib import Path
 from emperor.export.gguf import gguf_dir_for
 from emperor.train.config import SftConfig
 
-BASE_MODEL = "Qwen/Qwen3-4B-Instruct-2507"
+BASE_MODEL = "Qwen/Qwen3.5-4B"
 # Typical bits per weight of llama.cpp types, used only when the file is not there to measure.
 BITS_PER_WEIGHT = {
     "bf16": 16.0,
@@ -23,8 +23,9 @@ BITS_PER_WEIGHT = {
     "Q4_K_M": 4.9,
 }
 DEFAULT_PARAMS = 4.02e9
-# Qwen3-4B: layers, KV heads, head size. Overridden by the model's own config.json when present.
-DEFAULT_ARCH = {"num_hidden_layers": 36, "num_key_value_heads": 8, "head_dim": 128}
+# Qwen3.5-4B: layers with a KV cache (8 full-attention layers; the 24 Gated DeltaNet layers keep
+# a fixed-size state), KV heads, head size. Overridden by the model's own config.json when present.
+DEFAULT_ARCH = {"num_hidden_layers": 8, "num_key_value_heads": 4, "head_dim": 256}
 GIB = 2**30
 
 
@@ -49,7 +50,7 @@ def front_matter(fields: dict) -> str:
 
 
 def kv_cache_gib(tokens: int, arch: dict | None = None) -> float:
-    """f16 KV cache: 2 (K and V) x layers x KV heads x head size x 2 bytes, per token."""
+    """f16 KV cache: 2 (K and V) x KV-cache layers x KV heads x head size x 2 bytes, per token."""
     a = {**DEFAULT_ARCH, **(arch or {})}
     per_token = 2 * a["num_hidden_layers"] * a["num_key_value_heads"] * a["head_dim"] * 2
     return tokens * per_token / GIB
@@ -60,8 +61,14 @@ def read_arch(weights: Path) -> dict | None:
     if not path.is_file():
         return None
     data = json.loads(path.read_text(encoding="utf-8"))
+    data = {**data, **data.get("text_config", {})}  # multimodal configs nest the language model
     keys = ("num_hidden_layers", "num_key_value_heads", "head_dim")
-    return {k: data[k] for k in keys if isinstance(data.get(k), int)}
+    arch = {k: data[k] for k in keys if isinstance(data.get(k), int)}
+    layer_types = data.get("layer_types")
+    if isinstance(layer_types, list) and layer_types:
+        # Hybrid models: only the full-attention layers grow a KV cache with the context.
+        arch["num_hidden_layers"] = sum(1 for t in layer_types if t == "full_attention")
+    return arch
 
 
 def weights_gib(kind: str, file_bytes: int | None = None, params: float = DEFAULT_PARAMS) -> float:
@@ -133,7 +140,8 @@ def recipe(config: SftConfig, train_result: dict | None) -> str:
     lines = [
         f"- Base: `{BASE_MODEL}`, bf16 weights (never quantised during training).",
         "- Method: supervised fine-tuning with a bf16 LoRA adapter (no QLoRA, no 4/8-bit), "
-        "merged into the base afterwards; loss on assistant tokens only.",
+        "merged into the base afterwards; loss on assistant tokens only, including the "
+        "teacher's reasoning in each turn's thinking block (samples without it are skipped).",
         f"- LoRA: r={lo.r}, alpha={lo.alpha}, dropout={lo.dropout}, "
         f"targets {', '.join(lo.target_modules)}.",
         f"- Optimiser: AdamW, learning rate {t.learning_rate:g}, {t.lr_scheduler} schedule, "

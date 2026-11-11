@@ -125,6 +125,10 @@ class ReplayEnvironment:
 
 def _assistant_message(reply: Reply) -> dict:
     message: dict = {"role": "assistant", "content": reply.content or ""}
+    if reply.reasoning:
+        # Sent back like the training data has it: a thinking model's template shows the
+        # reasoning of the turns since the user's message.
+        message["reasoning_content"] = reply.reasoning
     if reply.tool_calls:
         message["tool_calls"] = [
             {"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.arguments}}
@@ -142,7 +146,11 @@ def run_task(task: Task, model: ChatModel, context_tokens: int) -> Transcript:
         {"role": "user", "content": render_prompt(task, context_tokens)},
     ]
     for turn in range(MAX_TURNS):
-        used = sum(estimate_tokens(m.get("content") or "") for m in messages)
+        used = sum(
+            estimate_tokens(m.get("content") or "")
+            + estimate_tokens(m.get("reasoning_content") or "")
+            for m in messages
+        )
         if used > context_tokens:
             transcript.overflowed = True
             transcript.error = f"context overflow: about {used} tokens > {context_tokens}"

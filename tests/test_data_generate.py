@@ -3,26 +3,47 @@ import json
 import pytest
 from conftest import BRIEF
 
-from emperor.data.generate import Environment, GenerationConfig, generate_trace, run_generation
+from emperor.data.generate import (
+    _PREFLIGHT_USER,
+    TEACHER_REASONING_FIELD,
+    Environment,
+    GenerationConfig,
+    generate_trace,
+    run_generation,
+)
 from emperor.data.prompts import PromptRecord
 from emperor.data.shards import ShardWriter, done_ids, iter_records
 from emperor.data.teacher import TeacherError, require_local
 
+REASONING = "Think it through."
+
 
 class ScriptedTeacher:
-    """Plays fixed assistant messages and records what it was sent."""
+    """Plays fixed assistant messages and records what it was sent. A turn without a
+    `reasoning_content` key gets one, as the real teacher's do; set it to None for none.
+    The reasoning preflight is answered apart from the script (with reasoning unless
+    `preflight_reasoning` is false) and recorded in `preflight`."""
 
-    def __init__(self, turns):
+    def __init__(self, turns, preflight_reasoning=True):
         self.turns = list(turns)
         self.seen = []
         self.kwargs = []
+        self.preflight = []
+        self.preflight_reasoning = preflight_reasoning
 
     def chat(self, messages, *, tools=None, **kwargs):
+        if messages[-1].get("content") == _PREFLIGHT_USER:
+            self.preflight.append(kwargs)
+            reply = {"content": "", "tool_calls": []}
+            if self.preflight_reasoning:
+                reply["reasoning_content"] = REASONING
+            return reply
         self.seen.append((list(messages), tools))
         self.kwargs.append(kwargs)
         if not self.turns:
             raise TeacherError("out of script")
-        return self.turns.pop(0)
+        turn = self.turns.pop(0)
+        return turn if "reasoning_content" in turn else {**turn, "reasoning_content": REASONING}
 
 
 class FakeEnv:
@@ -165,3 +186,84 @@ def test_teacher_must_be_local():
     for url in ("https://api.openai.com/v1", "https://api.anthropic.com", "http://10.0.0.5:8080"):
         with pytest.raises(TeacherError):
             require_local(url)
+
+
+def test_teacher_reasoning_is_stored_per_turn_and_kept_in_the_teachers_history():
+    script = good_script()
+    script[0] = {**script[0], "reasoning_content": "  Delegate the work.  "}
+    teacher = ScriptedTeacher(script)
+    sample, reason = generate_trace(record(), teacher, FakeEnv())
+    assert reason is None
+    turns = [m for m in sample["messages"] if m["role"] == "assistant"]
+    assert [t.get("reasoning_content") for t in turns] == [
+        "Delegate the work.",
+        REASONING,
+        REASONING,
+    ]
+    history = teacher.seen[-1][0]
+    assert [m.get(TEACHER_REASONING_FIELD) for m in history if m["role"] == "assistant"] == [
+        "Delegate the work.",
+        REASONING,
+    ]
+
+
+def test_a_turn_without_reasoning_rejects_the_trace():
+    script = good_script()
+    script[1] = {**script[1], "reasoning_content": None}
+    sample, reason = generate_trace(record(), ScriptedTeacher(script), FakeEnv())
+    assert (sample, reason) == (None, "no_reasoning")
+    config = GenerationConfig(require_reasoning=False)
+    sample, reason = generate_trace(record(), ScriptedTeacher(script), FakeEnv(), config)
+    assert reason is None and "reasoning_content" not in sample["messages"][4]
+
+
+class ForcedToolHidesReasoning:
+    """A teacher whose reasoning disappears when a tool call is forced."""
+
+    def __init__(self, forced_reasoning=""):
+        self.kwargs = []
+        self.forced_reasoning = forced_reasoning
+
+    def chat(self, messages, *, tools=None, **kwargs):
+        self.kwargs.append(kwargs)
+        forced = kwargs.get("tool_choice") == "required"
+        return {"content": "ok", "reasoning_content": self.forced_reasoning if forced else "r"}
+
+
+def test_generation_stops_at_once_when_the_teacher_returns_no_reasoning(tmp_path):
+    from emperor.data.generate import check_teacher_reasoning
+    from emperor.data.teacher import TeacherSetupError
+
+    prompts = tmp_path / "prompts.jsonl"
+    prompts.write_text(json.dumps(record().to_dict()) + "\n", encoding="utf-8")
+    silent = ScriptedTeacher(good_script(), preflight_reasoning=False)
+    with pytest.raises(TeacherSetupError, match="tool_choice=required"):
+        run_generation(prompts, tmp_path, silent, FakeEnv())
+    assert silent.preflight[0]["tool_choice"] == "required" and silent.seen == []
+
+    with pytest.raises(TeacherSetupError, match="tool_choice=required"):
+        check_teacher_reasoning(ForcedToolHidesReasoning(), GenerationConfig())
+    fine = ForcedToolHidesReasoning(forced_reasoning="r")
+    check_teacher_reasoning(fine, GenerationConfig())
+    assert [k.get("tool_choice") for k in fine.kwargs] == ["required", None]
+    # Without forced tool calls in generation, only the unforced mode is checked.
+    check_teacher_reasoning(ForcedToolHidesReasoning(), GenerationConfig(force_first_tool=False))
+
+
+def test_generation_runs_after_a_passing_preflight(tmp_path):
+    prompts = tmp_path / "prompts.jsonl"
+    prompts.write_text(json.dumps(record().to_dict()) + "\n", encoding="utf-8")
+    teacher = ScriptedTeacher(good_script())
+    counts = run_generation(prompts, tmp_path, teacher, FakeEnv())
+    assert counts["accepted"] == 1 and len(teacher.preflight) == 2
+
+
+def test_generation_defaults_to_low_reasoning_effort():
+    from emperor.data.cli import build_parser
+    from emperor.data.teacher import ChatClient
+
+    args = build_parser().parse_args(["retry"])
+    assert (args.reasoning_effort, args.judge_reasoning_effort) == ("low", "medium")
+    assert args.environment_reasoning_effort == "medium"
+    assert build_parser().parse_args(["judge"]).judge_reasoning_effort == "medium"
+    assert ChatClient.__init__.__kwdefaults__["reasoning_effort"] == "low"

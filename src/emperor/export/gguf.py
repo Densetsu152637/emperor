@@ -75,6 +75,34 @@ def gguf_name(name: str, kind: str) -> str:
     return f"{name}-{kind}.gguf"
 
 
+def _tensor_names(model_dir: Path) -> set[str]:
+    index = model_dir / "model.safetensors.index.json"
+    if index.is_file():
+        return set(json.loads(index.read_text(encoding="utf-8"))["weight_map"])
+    names: set[str] = set()
+    for shard in model_dir.glob("*.safetensors"):
+        with shard.open("rb") as handle:
+            size = int.from_bytes(handle.read(8), "little")
+            names |= set(json.loads(handle.read(size))) - {"__metadata__"}
+    return names
+
+
+def converter_flags(model_dir: Path) -> list[str]:
+    """Extra converter options for this checkpoint. A merged Qwen3.5 model is text-only: its
+    config still declares the multi-token-prediction head, but the head's tensors are not
+    saved, so the converter is told to leave it out."""
+    path = model_dir / "config.json"
+    if not path.is_file():
+        return []
+    config = json.loads(path.read_text(encoding="utf-8"))
+    mtp = config.get("mtp_num_hidden_layers") or config.get("text_config", {}).get(
+        "mtp_num_hidden_layers"
+    )
+    if mtp and not any(n.startswith(("mtp.", "model.mtp.")) for n in _tensor_names(model_dir)):
+        return ["--no-mtp"]
+    return []
+
+
 def convert(
     script: Path,
     model_dir: Path,
@@ -91,7 +119,8 @@ def convert(
     partial.unlink(missing_ok=True)
     run(
         [sys.executable, str(script), str(model_dir), "--outfile", str(partial)]
-        + ["--outtype", outtype],
+        + ["--outtype", outtype]
+        + converter_flags(model_dir),
         check=True,
     )
     if not partial.is_file():

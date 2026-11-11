@@ -18,6 +18,11 @@ class TeacherOutputError(RuntimeError):
     output does not parse as the chat format): one bad sample, not a dead server."""
 
 
+class TeacherSetupError(RuntimeError):
+    """The teacher answers but cannot produce usable training data (for example it returns no
+    reasoning): retrying will not help, so the phase stops at once."""
+
+
 class TeacherError(RuntimeError):
     """The local teacher could not be reached or answered with something unusable."""
 
@@ -32,8 +37,17 @@ def require_local(base_url: str) -> str:
     return base_url.rstrip("/")
 
 
+# Generation runs the teacher at low effort: its reasoning is stored and trained on, and short
+# reasoning keeps traces within the student's training length. Judging keeps medium.
+GENERATE_EFFORT = "low"
+JUDGE_EFFORT = "medium"
+ENVIRONMENT_EFFORT = "medium"  # the tool-result simulator: its output is context, not trained
+EFFORTS = ("low", "medium", "high")
+
+
 class ChatClient:
-    """Chat completions against a local llama-server. `chat` returns the response message."""
+    """Chat completions against a local llama-server. `chat` returns the response message,
+    with the reasoning in `reasoning_content` and the answer in `content`."""
 
     def __init__(
         self,
@@ -42,7 +56,7 @@ class ChatClient:
         *,
         timeout: float = 900.0,
         retries: int = 3,
-        reasoning_effort: str | None = "medium",
+        reasoning_effort: str | None = GENERATE_EFFORT,
     ):
         import httpx  # the `data` dependency group; imported lazily to keep the core light
 

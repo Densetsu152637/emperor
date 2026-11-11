@@ -180,3 +180,80 @@ def test_cli_replay_through_a_server(fake_server, capsys, tmp_path):
 def test_unreachable_server_is_a_model_error():
     with pytest.raises(ModelError, match="cannot reach"):
         OpenAICompatModel("http://127.0.0.1:9/v1", "m", timeout=2).complete([], [])
+
+
+def test_thinking_is_split_from_the_answer_before_parsing(fake_server):
+    from emperor.eval.models import split_thinking
+
+    assert split_thinking("<think>\nplan it\n</think>\n\nDone.") == ("plan it", "Done.")
+    # The generation prompt opened the block, so only the closing tag is in the reply.
+    assert split_thinking("plan it\n</think>\n\nDone.") == ("plan it", "Done.")
+    assert split_thinking("<think>\nran out of tokens") == ("ran out of tokens", "")
+    assert split_thinking("No thinking here.") == (None, "No thinking here.")
+
+    server = fake_server(
+        [
+            completion(content="Spawn one agent.\n</think>\n\n"),
+            completion(content="All done."),
+        ]
+    )
+    # Reasoning the server separated, and a block it left in the content.
+    server.responses[0]["choices"][0]["message"]["tool_calls"] = [
+        {
+            "id": "c0",
+            "type": "function",
+            "function": {"name": "update_plan", "arguments": json.dumps({"steps": []})},
+        }
+    ]
+    server.responses[1]["choices"][0]["message"]["reasoning_content"] = "Wrap up."
+    model = OpenAICompatModel(server.url, "emperor")
+    assert model.max_tokens >= 16384
+    transcript = run_task(heldout("refactor-rename"), model, TIER)
+    assert transcript.final == "All done."
+    assert transcript.replies[0].reasoning == "Spawn one agent."
+    assert transcript.replies[0].content == ""
+    assert transcript.replies[1].reasoning == "Wrap up."
+    assert "</think>" not in transcript.output_text()
+    # The reasoning goes back with its turn, as the model was trained to see it.
+    history = server.requests[1]["body"]["messages"]
+    assert history[2]["reasoning_content"] == "Spawn one agent."
+
+
+def test_scripted_thinking_does_not_reach_the_final_answer():
+    task = heldout("answer-http-418")
+    model = ScriptedModel([{"content": "<think>\n418 is a joke code.\n</think>\n\nI'm a teapot."}])
+    transcript = run_task(task, model, TIER)
+    assert transcript.final == "I'm a teapot."
+    assert transcript.replies[0].reasoning == "418 is a joke code."
+
+
+def test_a_reply_cut_off_mid_thought_is_reasoning_without_an_answer(fake_server):
+    from emperor.eval.models import split_thinking
+
+    assert split_thinking("Still weighing the options", truncated=True) == (
+        "Still weighing the options",
+        "",
+    )
+    reply = completion(content="Still weighing the options")
+    reply["choices"][0]["finish_reason"] = "length"
+    served = completion(content="Partial answer")
+    served["choices"][0]["finish_reason"] = "length"
+    served["choices"][0]["message"]["reasoning_content"] = "Done thinking."
+    server = fake_server([reply, served])
+    model = OpenAICompatModel(server.url, "emperor")
+    first = model.complete([], [])
+    assert (first.reasoning, first.content) == ("Still weighing the options", "")
+    # The server separated the reasoning, so the cut-off text is a (partial) answer.
+    second = model.complete([], [])
+    assert (second.reasoning, second.content) == ("Done thinking.", "Partial answer")
+
+
+def test_reasoning_counts_towards_the_context_budget():
+    task = heldout("refactor-rename")
+    # All of it is reasoning: the visible content alone would never overflow the budget.
+    turn = {
+        "content": "<think>" + "word " * 40_000 + "</think>",
+        "tool_calls": [{"name": "update_plan", "arguments": {"steps": []}}],
+    }
+    transcript = run_task(task, ScriptedModel([turn, turn]), 32_768)
+    assert transcript.overflowed and len(transcript.replies) == 1

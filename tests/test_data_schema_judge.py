@@ -9,6 +9,7 @@ from emperor.data.judge import (
     decide,
     heuristic_flags,
     parse_judge_output,
+    render_transcript,
     run_judging,
 )
 from emperor.data.schema import validate_sample
@@ -144,3 +145,13 @@ def test_judging_is_resumable_and_records_scores(tmp_path):
     assert report["pass_rate"] == pytest.approx(0.6667, abs=1e-3)
     assert report["score_histograms"]["style"] == {"5": 2}
     assert report["judge_rejection_reasons"] == {"judge_unparseable": 1}
+
+
+def test_reasoning_is_checked_for_secrets_and_hidden_from_the_judge(sample):
+    sample["messages"][-1]["reasoning_content"] = "The user wants pagination."
+    assert validate_sample(sample).ok
+    assert "The user wants" not in render_transcript(sample)
+    sample["messages"][-1]["reasoning_content"] = "Log in with sk-abcdefghijklmnopqrstuvwx."
+    assert "secret_in_reasoning" in reasons(sample)
+    sample["messages"][-1]["reasoning_content"] = ["not", "text"]
+    assert "reasoning_not_text" in reasons(sample)

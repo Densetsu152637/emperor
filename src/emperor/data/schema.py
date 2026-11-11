@@ -77,6 +77,12 @@ def validate_sample(sample: dict) -> Check:
             check.add("empty_assistant_turn")
         if secret_hits(content):
             check.add("secret_in_assistant_text")
+        reasoning = message.get("reasoning_content")
+        if reasoning is not None:
+            if not isinstance(reasoning, str):
+                check.add("reasoning_not_text")
+            elif secret_hits(reasoning):
+                check.add("secret_in_reasoning")
         for call in calls:
             _check_call(call, tools, seen_ids, check)
         j = i + 1

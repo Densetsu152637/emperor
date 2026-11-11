@@ -15,7 +15,7 @@ from pathlib import Path
 
 from emperor.eval.imperiumd import BackendUnavailable, ImperiumdBackend
 from emperor.eval.metrics import METRICS as METRIC_DEFS
-from emperor.eval.models import OpenAICompatModel, ScriptedModel
+from emperor.eval.models import DEFAULT_MAX_TOKENS, OpenAICompatModel, ScriptedModel
 from emperor.eval.report import CeilingExceeded, CostMeter, run_suite
 from emperor.eval.tasks import TaskError, load_suite, load_tasks
 
@@ -84,6 +84,12 @@ def build_parser() -> argparse.ArgumentParser:
         "or EMPEROR_EVAL_BASE_URL)",
     )
     parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=DEFAULT_MAX_TOKENS,
+        help=f"tokens per reply, thinking included (default: {DEFAULT_MAX_TOKENS})",
+    )
+    parser.add_argument(
         "--tasks", type=Path, help="task directory or file to use instead of the bundled suite"
     )
     parser.add_argument(
@@ -140,7 +146,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         if not args.model:
             return _fail("--model is required without --dry-run")
-        client = OpenAICompatModel(args.base_url, args.model.split(":", 1)[-1])
+        client = OpenAICompatModel(
+            args.base_url, args.model.split(":", 1)[-1], max_tokens=args.max_tokens
+        )
 
         def model_for(task):
             return client

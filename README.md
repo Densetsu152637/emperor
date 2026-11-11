@@ -64,8 +64,10 @@ Phases (`--skip <phase>` skips one; every phase is resumable):
    target style: concise and structured, big picture first, delegates instead of pasting code,
    few emojis, no walls of tables, searches instead of recalling facts, never handles
    credentials. A separate "environment" call simulates the tool results. The stored sample keeps
-   only the plain Emperor prompt, so the style is learned rather than instructed.
-3. **judge**: the same model scores each trace 1-5 on eight criteria and answers pass or fail as
+   only the plain Emperor prompt, so the style is learned rather than instructed. Each assistant
+   turn keeps the teacher's reasoning for it as `reasoning_content`; the teacher runs at low
+   reasoning effort (`--reasoning-effort`) to keep traces short.
+3. **judge**: the same model (at `--judge-reasoning-effort`, default medium) scores each trace 1-5 on eight criteria and answers pass or fail as
    JSON. A trace is kept when the judge passes it, the mean is at least 4.0 (`--threshold`), no
    criterion is below 3, and the emoji, table and pasted-code checks are clean. Schema checks run
    first: tool calls validate against the vendored schemas, roles alternate, briefs have Goal and
@@ -73,12 +75,17 @@ Phases (`--skip <phase>` skips one; every phase is resumable):
    patterns).
 4. **filter**: writes `data/final/final.jsonl` and `data/report.json` (counts, pass rate, score
    histograms, rejection reasons).
-5. **train**: `configs/sft.toml`, bf16 LoRA on `D:\AI-Models\unsloth\Qwen3-4B-Instruct-2507`
-   with TRL, gradient checkpointing, assistant-only loss, sequence length 8192, no packing, a
-   checkpoint every 50 steps and resume from the last one. There is no QLoRA and no 4/8-bit
-   loading; the config parser refuses such keys. The base directory is only read.
+5. **train**: `configs/sft.toml`, bf16 LoRA on `D:\AI-Models\Qwen\Qwen3.5-4B` (Apache-2.0;
+   the text model only, without the vision encoder or the multi-token-prediction head) with TRL,
+   gradient checkpointing, assistant-only loss (the teacher's reasoning, rendered as the
+   template's `<think>` block, is trained too; samples without reasoning are skipped and counted
+   in the log), sequence length 8192, no packing, a checkpoint every 50 steps and resume from
+   the last one. The Gated DeltaNet layers run on flash-linear-attention's Triton kernels
+   (`triton-windows` on Windows, which bundles its own C compiler). There is no QLoRA and no
+   4/8-bit loading; the config parser refuses such keys. The base directory is only read.
 6. **merge**: the adapter is merged into the base and saved as bf16 safetensors in
-   `weights/emperor-4b-bf16/`.
+   `weights/emperor-4b-bf16/` (the few tensors the base keeps in fp32 stay fp32; the export
+   leaves out the multi-token-prediction head, which the text model does not carry).
 7. **export**: GGUF through llama.cpp's `convert_hf_to_gguf.py` (a shallow clone of tag `b12180`
    in the ignored `tools/llama.cpp`, or `--llama-cpp` / `EMPEROR_LLAMA_CPP`), then
    `llama-quantize` to the `[release] gguf_types` (Q8_0, Q6_K, Q4_K_M). Writes
