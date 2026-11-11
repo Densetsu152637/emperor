@@ -75,8 +75,8 @@ Phases (`--skip <phase>` skips one; every phase is resumable):
    patterns).
 4. **filter**: writes `data/final/final.jsonl` and `data/report.json` (counts, pass rate, score
    histograms, rejection reasons).
-5. **train**: `configs/sft.toml`, bf16 LoRA on `D:\AI-Models\unsloth\Qwen3-4B-Thinking-2507`
-   with TRL, gradient checkpointing, assistant-only loss (the teacher's reasoning, rendered as the
+5. **train**: `configs/sft.toml`, bf16 LoRA on `D:\AI-Models\Qwen\Qwen3.5-4B` (Apache-2.0;
+   the text model only, without the vision encoder or the multi-token-prediction head) with TRL, gradient checkpointing, assistant-only loss (the teacher's reasoning, rendered as the
    template's `<think>` block, is trained too; samples without reasoning are skipped and counted
    in the log), sequence length from the config, no packing, a
    checkpoint every 50 steps and resume from the last one. There is no QLoRA and no 4/8-bit

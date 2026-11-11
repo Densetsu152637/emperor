@@ -15,7 +15,7 @@ class ConfigError(ValueError):
 
 @dataclass
 class ModelConfig:
-    base: str = "D:/AI-Models/unsloth/Qwen3-4B-Thinking-2507"
+    base: str = "D:/AI-Models/Qwen/Qwen3.5-4B"
     attn_implementation: str = "sdpa"
     min_free_vram_gib: float = 13.5  # round 1 peaked at 12.7 GiB, plus the CUDA context
 
@@ -40,6 +40,9 @@ class LoraConfig:
             "k_proj",
             "v_proj",
             "o_proj",
+            "in_proj_qkv",  # Qwen3.5 Gated DeltaNet layers
+            "in_proj_z",
+            "out_proj",
             "gate_proj",
             "up_proj",
             "down_proj",

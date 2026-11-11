@@ -139,8 +139,24 @@ def test_explicit_llama_cpp_checkout_is_used_without_cloning(tmp_path):
 def test_front_matter_and_kv_cache():
     text = card.front_matter({"license": "apache-2.0", "tags": ["a", "b"], "flag": True})
     assert text == '---\nlicense: "apache-2.0"\ntags:\n- "a"\n- "b"\nflag: true\n---'
-    # Qwen3-4B: 36 layers x 8 KV heads x 128 x 2 (K,V) x 2 bytes = 144 KiB per token
-    assert card.kv_cache_gib(1024) == pytest.approx(0.140625)
+    # Qwen3.5-4B: 8 full-attention layers x 4 KV heads x 256 x 2 (K,V) x 2 bytes = 32 KiB/token
+    assert card.kv_cache_gib(1024) == pytest.approx(0.03125)
+    # Qwen3-4B: 36 layers x 8 KV heads x 128 = 144 KiB per token
+    qwen3 = {"num_hidden_layers": 36, "num_key_value_heads": 8, "head_dim": 128}
+    assert card.kv_cache_gib(1024, qwen3) == pytest.approx(0.140625)
+
+
+def test_hybrid_configs_count_only_full_attention_layers(tmp_path):
+    import json
+
+    text = {"num_hidden_layers": 4, "num_key_value_heads": 4, "head_dim": 256}
+    text["layer_types"] = ["linear_attention"] * 3 + ["full_attention"]
+    (tmp_path / "config.json").write_text(json.dumps({"text_config": text}))
+    assert card.read_arch(tmp_path) == {
+        "num_hidden_layers": 1,
+        "num_key_value_heads": 4,
+        "head_dim": 256,
+    }
 
 
 def test_card_renders_every_section_from_a_sample_report():
@@ -153,7 +169,7 @@ def test_card_renders_every_section_from_a_sample_report():
         gguf_files=[{"type": "bf16", "file": "emperor-4b-bf16.gguf", "bytes": 8 * 2**30}],
     )
     text = card.render_card(inputs, "bf16")
-    assert text.startswith('---\nlicense: "apache-2.0"\nbase_model: "Qwen/Qwen3-4B-Thinking-2507"')
+    assert text.startswith('---\nlicense: "apache-2.0"\nbase_model: "Qwen/Qwen3.5-4B"')
     assert 'pipeline_tag: "text-generation"' in text
     assert "| tool_validity | G1 | 40 | 0.975 | 0.98 | no |" in text
     assert "| retrieval | G6 | 0 | n/a | n/a | n/a |" in text
@@ -337,3 +353,19 @@ def test_project_entrypoint_dispatch(tmp_path, monkeypatch):
     assert dispatch.project_entrypoint("eval", tmp_path) is None
     monkeypatch.chdir(tmp_path)
     assert dispatch.pipeline_main(["--help"]) == json.dumps(["--help"])  # delegated
+
+
+def test_a_merged_model_without_its_mtp_head_converts_without_it(tmp_path):
+    import json
+
+    from emperor.export.gguf import converter_flags
+
+    (tmp_path / "config.json").write_text(json.dumps({"mtp_num_hidden_layers": 1}))
+    index = {"weight_map": {"model.layers.0.mlp.up_proj.weight": "a.safetensors"}}
+    (tmp_path / "model.safetensors.index.json").write_text(json.dumps(index))
+    assert converter_flags(tmp_path) == ["--no-mtp"]
+    index["weight_map"]["mtp.fc.weight"] = "a.safetensors"
+    (tmp_path / "model.safetensors.index.json").write_text(json.dumps(index))
+    assert converter_flags(tmp_path) == []
+    (tmp_path / "config.json").write_text(json.dumps({"num_hidden_layers": 36}))
+    assert converter_flags(tmp_path) == []

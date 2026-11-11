@@ -2,7 +2,7 @@
 # Paths are relative to the repository root unless absolute. The base is read-only.
 
 [model]
-base = "D:/AI-Models/unsloth/Qwen3-4B-Thinking-2507"
+base = "D:/AI-Models/Qwen/Qwen3.5-4B"
 attn_implementation = "sdpa"  # flash-attn has no Windows wheel
 
 [data]
@@ -15,7 +15,13 @@ split_seed = 1337
 r = 32
 alpha = 64
 dropout = 0.05
-target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+# Qwen3.5: full-attention layers (q/k/v/o), Gated DeltaNet layers (in_proj_qkv, in_proj_z,
+# out_proj; the per-head in_proj_a/in_proj_b gates stay frozen) and every MLP.
+target_modules = [
+  "q_proj", "k_proj", "v_proj", "o_proj",
+  "in_proj_qkv", "in_proj_z", "out_proj",
+  "gate_proj", "up_proj", "down_proj",
+]
 
 [train]
 output_dir = "outputs/sft"

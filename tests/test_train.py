@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def test_shipped_config_loads_and_is_bf16_lora():
     config = load_config(ROOT / "configs" / "sft.toml")
     assert config.dtype == "bfloat16"
-    assert config.model.base.endswith("Qwen3-4B-Thinking-2507")
+    assert config.model.base.endswith("Qwen3.5-4B")
     assert config.merge.output_dir == "weights/emperor-4b-bf16"
     assert config.train.save_steps > 0 and config.train.gradient_checkpointing
 
@@ -149,7 +149,8 @@ def test_training_stops_when_vram_is_short(monkeypatch):
 
 
 def thinking_render(messages, add_generation_prompt):
-    """A Python copy of the Qwen3 Thinking-2507 template's assistant logic (no tool section)."""
+    """The assistant logic of Qwen3 thinking templates (Thinking-2507; Qwen3.5 differs only in
+    always writing the block after the last query), without the tool section."""
     query = last_query_index(messages)
     text = ""
     for i, message in enumerate(messages):
