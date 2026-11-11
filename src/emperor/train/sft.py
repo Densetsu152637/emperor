@@ -38,6 +38,16 @@ def cap_vram(margin_gib: float = 0.5) -> float:
     return fraction * total / 2**30
 
 
+def use_fused_attention() -> None:
+    """Make SDPA repeat the key/value heads itself rather than pass `enable_gqa`: this torch
+    build has no fused kernel for GQA, so it falls back to the math path, whose L x L attention
+    matrix runs a 16 GB card out of memory on long samples. Repeated heads use the
+    memory-efficient kernel (0.2 GiB at 6144 tokens)."""
+    from transformers.integrations import sdpa_attention
+
+    sdpa_attention.use_gqa_in_sdpa = lambda *args, **kwargs: False
+
+
 def log_placement(model) -> None:
     """Say where the weights went; layers offloaded to the CPU make training far slower."""
     devices: dict[str, int] = {}
@@ -95,6 +105,7 @@ def train(config: SftConfig, root: Path, pause_file: Path | None = None) -> int:
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is not available; check the torch build (cu128 for RTX 50 series)")
     log.info("VRAM cap for training: %.1f GiB", cap_vram())
+    use_fused_attention()
     base = Path(config.model.base)
     tokenizer = AutoTokenizer.from_pretrained(base)
     data = prepare_datasets(config, tokenizer, root)

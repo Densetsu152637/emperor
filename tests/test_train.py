@@ -122,3 +122,8 @@ def test_gguf_export_is_optional(tmp_path, monkeypatch):
     assert find_converter() is None
     (tmp_path / "convert_hf_to_gguf.py").write_text("", encoding="utf-8")
     assert find_converter(tmp_path) == tmp_path / "convert_hf_to_gguf.py"
+
+
+def test_unpadded_batches_drop_the_attention_mask():
+    batch = pad_batch([{"input_ids": [1, 2], "labels": [IGNORE, 2], "attention_mask": [1, 1]}], 0)
+    assert "attention_mask" not in batch and batch["position_ids"] == [[0, 1]]
