@@ -64,6 +64,8 @@ DEFAULT_JUDGE_GGUF = "D:/AI-Models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_
 # The teacher server keeps one slot per role, so the teacher's growing conversation and the
 # tool simulator's short prompts each stay cached instead of evicting each other.
 TEACHER_SLOT, ENVIRONMENT_SLOT = 0, 1
+# The 65 GB teacher takes about 9 minutes to load from disk; the old 10-minute limit was too tight.
+SERVER_LOAD_SECONDS = 3600.0
 # No host-RAM prompt cache next to the 120B teacher: the machine has no RAM to spare for it.
 TEACHER_SERVER_ARGS = ["--cache-ram", "0"]
 
@@ -285,7 +287,7 @@ class Pipeline:
             command += extra_args or []
             server = ManagedProcess(command, self.s.run_dir / f"llama-{name}.log", self.own).start()
             log.info("%s: llama-server pid %s on port %d", name, server.pid, port)
-            if not wait_for_health(f"http://127.0.0.1:{port}", server):
+            if not wait_for_health(f"http://127.0.0.1:{port}", server, SERVER_LOAD_SECONDS):
                 server.stop()
                 raise RuntimeError("llama-server did not become ready")
             return server
