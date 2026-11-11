@@ -9,7 +9,7 @@ attn_implementation = "sdpa"  # flash-attn has no Windows wheel
 [data]
 path = "data/r2/final/final.jsonl"
 extra_paths = ["data/final/final.jsonl"]  # round 1 kept samples, deduped by id
-max_length = 8192  # lower to 4096 if the 16 GB card runs out of memory
+max_length = 6144  # keeps ~87% of round 1 samples; 8192 overflowed the 16 GB card
 val_fraction = 0.05
 split_seed = 1337
 
@@ -32,7 +32,7 @@ gradient_checkpointing = true
 save_steps = 50  # a checkpoint every N optimiser steps; training resumes from the last one
 save_total_limit = 3
 eval_steps = 50
-logging_steps = 5
+logging_steps = 1
 max_grad_norm = 1.0
 seed = 1337
 
