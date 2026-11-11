@@ -18,6 +18,11 @@ class TeacherOutputError(RuntimeError):
     output does not parse as the chat format): one bad sample, not a dead server."""
 
 
+class TeacherSetupError(RuntimeError):
+    """The teacher answers but cannot produce usable training data (for example it returns no
+    reasoning): retrying will not help, so the phase stops at once."""
+
+
 class TeacherError(RuntimeError):
     """The local teacher could not be reached or answered with something unusable."""
 
@@ -36,6 +41,7 @@ def require_local(base_url: str) -> str:
 # reasoning keeps traces within the student's training length. Judging keeps medium.
 GENERATE_EFFORT = "low"
 JUDGE_EFFORT = "medium"
+ENVIRONMENT_EFFORT = "medium"  # the tool-result simulator: its output is context, not trained
 EFFORTS = ("low", "medium", "high")
 
 

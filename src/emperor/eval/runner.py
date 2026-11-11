@@ -146,7 +146,11 @@ def run_task(task: Task, model: ChatModel, context_tokens: int) -> Transcript:
         {"role": "user", "content": render_prompt(task, context_tokens)},
     ]
     for turn in range(MAX_TURNS):
-        used = sum(estimate_tokens(m.get("content") or "") for m in messages)
+        used = sum(
+            estimate_tokens(m.get("content") or "")
+            + estimate_tokens(m.get("reasoning_content") or "")
+            for m in messages
+        )
         if used > context_tokens:
             transcript.overflowed = True
             transcript.error = f"context overflow: about {used} tokens > {context_tokens}"

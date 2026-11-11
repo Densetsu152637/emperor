@@ -16,7 +16,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from emperor.data.teacher import EFFORTS, GENERATE_EFFORT, JUDGE_EFFORT
+from emperor.data.teacher import EFFORTS, ENVIRONMENT_EFFORT, GENERATE_EFFORT, JUDGE_EFFORT
 from emperor.eval.cli import CONTEXT_TIERS
 from emperor.export.gguf import DEFAULT_CACHE
 from emperor.pipeline.idle import (
@@ -101,6 +101,12 @@ def build_parser(prog: str = "pipeline", description: str | None = None) -> argp
     )
     data.add_argument("--judge-reasoning-effort", default=JUDGE_EFFORT, choices=EFFORTS)
     data.add_argument(
+        "--environment-reasoning-effort",
+        default=ENVIRONMENT_EFFORT,
+        choices=EFFORTS,
+        help="effort of the call that simulates tool results",
+    )
+    data.add_argument(
         "--llama-server", type=Path, help="default: EMPEROR_LLAMA_SERVER, PATH, Imperium"
     )
 
@@ -135,6 +141,7 @@ def settings_from(args, run_dir: Path) -> Settings:
         parallel=args.parallel,
         reasoning_effort=args.reasoning_effort,
         judge_reasoning_effort=args.judge_reasoning_effort,
+        environment_reasoning_effort=args.environment_reasoning_effort,
         llama_server=args.llama_server,
         llama_cpp=args.llama_cpp,
         llama_cache=args.llama_cache,

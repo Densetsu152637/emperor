@@ -30,12 +30,14 @@ THINK_OPEN = "<think>"
 THINK_CLOSE = "</think>"
 
 
-def split_thinking(content: str | None) -> tuple[str | None, str | None]:
+def split_thinking(
+    content: str | None, *, truncated: bool = False
+) -> tuple[str | None, str | None]:
     """(reasoning, answer) from a reply that may still hold its thinking block.
 
     A thinking model's generation prompt already opens `<think>`, so the text may hold only the
-    closing tag. Text that opens a block and never closes it (the model ran out of tokens) is
-    all reasoning and no answer.
+    closing tag. Text that opens a block and never closes it is all reasoning and no answer, and
+    so is untagged text cut off by the token limit (`truncated`): the model was still thinking.
     """
     if content is None:
         return None, None
@@ -46,6 +48,8 @@ def split_thinking(content: str | None) -> tuple[str | None, str | None]:
     stripped = content.lstrip()
     if stripped.startswith(THINK_OPEN):
         return stripped[len(THINK_OPEN) :].strip() or None, ""
+    if truncated:
+        return stripped.strip() or None, ""
     return None, content
 
 
@@ -170,9 +174,13 @@ class OpenAICompatModel:
             for i, call in enumerate(message.get("tool_calls") or [])
         ]
         usage = payload.get("usage") or {}
-        reasoning, content = split_thinking(message.get("content"))
         served = message.get("reasoning_content")
-        if isinstance(served, str) and served.strip():
+        served_reasoning = isinstance(served, str) and bool(served.strip())
+        # Cut off by the token limit before any answer: when the server did not separate the
+        # reasoning itself, the untagged text is the model still thinking.
+        truncated = payload["choices"][0].get("finish_reason") == "length" and not served_reasoning
+        reasoning, content = split_thinking(message.get("content"), truncated=truncated)
+        if served_reasoning:
             reasoning = served.strip() if reasoning is None else f"{served.strip()}\n{reasoning}"
         return Reply(
             content=content,

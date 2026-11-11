@@ -14,7 +14,7 @@ from emperor.data.prompts import HeldoutIndex, generate_prompts, normalise
 from emperor.data.retry import DEFAULT_RETRIES, run_retry_rounds
 from emperor.data.schema import validate_sample
 from emperor.data.shards import iter_records, read_jsonl
-from emperor.data.teacher import EFFORTS, GENERATE_EFFORT, JUDGE_EFFORT
+from emperor.data.teacher import EFFORTS, ENVIRONMENT_EFFORT, GENERATE_EFFORT, JUDGE_EFFORT
 
 DEFAULT_DATA_DIR = Path("data")
 DEFAULT_BASE_URL = "http://127.0.0.1:8081/v1"
@@ -43,6 +43,12 @@ def build_parser() -> argparse.ArgumentParser:
                 default=GENERATE_EFFORT,
                 choices=EFFORTS,
                 help="teacher effort while generating; its reasoning is stored in the traces",
+            )
+            p.add_argument(
+                "--environment-reasoning-effort",
+                default=ENVIRONMENT_EFFORT,
+                choices=EFFORTS,
+                help="effort of the call that simulates tool results",
             )
             p.add_argument(
                 "--retries",
@@ -81,20 +87,26 @@ def cmd_prompts(args) -> int:
 
 def cmd_generate(args) -> int:
     from emperor.data.generate import run_generation
-    from emperor.data.teacher import ChatClient
+    from emperor.data.teacher import ChatClient, TeacherSetupError
 
     client = ChatClient(args.base_url, reasoning_effort=args.reasoning_effort)
+    environment = ChatClient(args.base_url, reasoning_effort=args.environment_reasoning_effort)
     try:
         counts = run_generation(
             args.data_dir / "prompts.jsonl",
             args.data_dir,
             client,
+            environment,
             config=generation_config(args),
             limit=args.limit,
             log=lambda line: print(line, file=sys.stderr),
         )
+    except TeacherSetupError as error:
+        print(f"generate: {error}", file=sys.stderr)
+        return 2
     finally:
         client.close()
+        environment.close()
     print(json.dumps(counts))
     return 0
 
@@ -106,23 +118,29 @@ def generation_config(args):
 
 
 def cmd_retry(args) -> int:
-    from emperor.data.teacher import ChatClient
+    from emperor.data.teacher import ChatClient, TeacherSetupError
 
     client = ChatClient(args.base_url, reasoning_effort=args.reasoning_effort)
     judge_client = ChatClient(args.base_url, reasoning_effort=args.judge_reasoning_effort)
+    environment = ChatClient(args.base_url, reasoning_effort=args.environment_reasoning_effort)
     try:
         counts = run_retry_rounds(
             args.data_dir,
             client,
             judge_client=judge_client,
+            environment_client=environment,
             rounds=args.retries,
             config=generation_config(args),
             threshold=args.threshold,
             log=lambda line: print(line, file=sys.stderr),
         )
+    except TeacherSetupError as error:
+        print(f"retry: {error}", file=sys.stderr)
+        return 2
     finally:
         client.close()
         judge_client.close()
+        environment.close()
     print(json.dumps(counts))
     return 0
 

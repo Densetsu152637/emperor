@@ -225,3 +225,35 @@ def test_scripted_thinking_does_not_reach_the_final_answer():
     transcript = run_task(task, model, TIER)
     assert transcript.final == "I'm a teapot."
     assert transcript.replies[0].reasoning == "418 is a joke code."
+
+
+def test_a_reply_cut_off_mid_thought_is_reasoning_without_an_answer(fake_server):
+    from emperor.eval.models import split_thinking
+
+    assert split_thinking("Still weighing the options", truncated=True) == (
+        "Still weighing the options",
+        "",
+    )
+    reply = completion(content="Still weighing the options")
+    reply["choices"][0]["finish_reason"] = "length"
+    served = completion(content="Partial answer")
+    served["choices"][0]["finish_reason"] = "length"
+    served["choices"][0]["message"]["reasoning_content"] = "Done thinking."
+    server = fake_server([reply, served])
+    model = OpenAICompatModel(server.url, "emperor")
+    first = model.complete([], [])
+    assert (first.reasoning, first.content) == ("Still weighing the options", "")
+    # The server separated the reasoning, so the cut-off text is a (partial) answer.
+    second = model.complete([], [])
+    assert (second.reasoning, second.content) == ("Done thinking.", "Partial answer")
+
+
+def test_reasoning_counts_towards_the_context_budget():
+    task = heldout("refactor-rename")
+    # All of it is reasoning: the visible content alone would never overflow the budget.
+    turn = {
+        "content": "<think>" + "word " * 40_000 + "</think>",
+        "tool_calls": [{"name": "update_plan", "arguments": {"steps": []}}],
+    }
+    transcript = run_task(task, ScriptedModel([turn, turn]), 32_768)
+    assert transcript.overflowed and len(transcript.replies) == 1
