@@ -92,9 +92,24 @@ def test_client_sends_tool_choice_and_falls_back_when_the_server_rejects_it():
     client = ChatClient.__new__(ChatClient)  # skips the httpx import (a separate dependency group)
     client.base_url, client.model, client.retries = "http://127.0.0.1:1/v1", "m", 3
     client.reasoning_effort, client.tool_choice_supported = None, True
+    client.slot, client.template_kwargs = None, {}
     client._http = _Http(reject_tool_choice=False)
     client.chat(USER, tools=TOOLS, tool_choice="required")
     assert client._http.bodies[0]["tool_choice"] == "required"
+    assert "id_slot" not in client._http.bodies[0]
+    assert "chat_template_kwargs" not in client._http.bodies[0]
+
+    # A role's slot and the template options go with every request.
+    client.slot, client.template_kwargs, client.reasoning_effort = (
+        1,
+        {"enable_thinking": True},
+        "low",
+    )
+    client.chat(USER)
+    body = client._http.bodies[-1]
+    assert body["id_slot"] == 1
+    assert body["chat_template_kwargs"] == {"enable_thinking": True, "reasoning_effort": "low"}
+    client.slot, client.template_kwargs, client.reasoning_effort = None, {}, None
 
     client._http = _Http(reject_tool_choice=True)
     assert client.chat(USER, tools=TOOLS, tool_choice="required")["content"] == "hi"

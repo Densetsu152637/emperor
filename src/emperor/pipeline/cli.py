@@ -27,6 +27,7 @@ from emperor.pipeline.idle import (
 )
 from emperor.pipeline.processes import OwnProcesses
 from emperor.pipeline.run import (
+    DEFAULT_JUDGE_GGUF,
     DEFAULT_TEACHER_GGUF,
     PHASES,
     Pipeline,
@@ -92,6 +93,13 @@ def build_parser(prog: str = "pipeline", description: str | None = None) -> argp
     data.add_argument("--teacher-gguf", type=Path, default=Path(DEFAULT_TEACHER_GGUF))
     data.add_argument("--teacher-port", type=int, default=8081)
     data.add_argument("--teacher-context", type=int, default=32768, help="tokens per slot")
+    data.add_argument("--judge-gguf", type=Path, default=Path(DEFAULT_JUDGE_GGUF))
+    data.add_argument("--judge-context", type=int, default=32768)
+    data.add_argument(
+        "--no-judge-thinking",
+        action="store_true",
+        help="ask the judge to answer without thinking first (faster, less careful)",
+    )
     data.add_argument("--parallel", type=int, default=1, help="llama-server slots")
     data.add_argument(
         "--reasoning-effort",
@@ -138,6 +146,9 @@ def settings_from(args, run_dir: Path) -> Settings:
         teacher_gguf=args.teacher_gguf,
         teacher_port=args.teacher_port,
         teacher_context=args.teacher_context,
+        judge_gguf=args.judge_gguf,
+        judge_context=args.judge_context,
+        judge_thinking=not args.no_judge_thinking,
         parallel=args.parallel,
         reasoning_effort=args.reasoning_effort,
         judge_reasoning_effort=args.judge_reasoning_effort,

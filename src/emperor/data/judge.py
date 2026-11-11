@@ -1,4 +1,5 @@
-"""Judging: the same local model scores each trace against the rubric; heuristics add hard fails."""
+"""Judging: a separate local model (another family than the teacher) scores each trace against the
+rubric; heuristics add hard fails."""
 
 import json
 import re
@@ -10,7 +11,7 @@ from emperor.data.generate import Chat
 from emperor.data.schema import MAX_TABLE_ROWS, count_emojis, table_rows
 from emperor.data.shards import ShardWriter, done_ids, iter_records
 from emperor.data.style import CRITERIA, NOT_APPLICABLE, judge_system
-from emperor.data.teacher import TEACHER_MODEL, TeacherError, TeacherOutputError
+from emperor.data.teacher import JUDGE_MODEL, TeacherError, TeacherOutputError
 
 MEAN_THRESHOLD = 4.0
 MIN_CRITERION = 3
@@ -160,8 +161,20 @@ _STRICT_JSON = (
     "nothing else: no prose before or after, no code fence, no thinking out loud. Use the keys "
     '"scores" (all eight criteria, integers 1-5), "pass" (true or false) and "reason".'
 )
-# First try warm and short; the retry is cold, stricter about the format and has room to finish.
-_JUDGE_TRIES = ((0.2, 2048, ""), (0.0, 3072, _STRICT_JSON))
+# The judge thinks before it answers, so the token budget covers its reasoning as well. The retry
+# is colder, stricter about the format and has more room to finish.
+_JUDGE_TRIES = ((0.6, 8192, ""), (0.3, 12288, _STRICT_JSON))
+
+
+def judge_answer(reply: dict) -> str:
+    """The judge's answer without its thinking: llama-server normally puts the reasoning in
+    `reasoning_content`, but a `<think>` block left in the content is cut off here too."""
+    content = reply.get("content") or ""
+    if "</think>" in content:
+        content = content.rsplit("</think>", 1)[1]
+    elif content.lstrip().startswith("<think>"):
+        content = ""  # still thinking when the token budget ran out
+    return content
 
 
 def judge_sample(sample: dict, client: Chat, *, seed: int = 0, attempts: int = 2) -> JudgeResult:
@@ -181,7 +194,7 @@ def judge_sample(sample: dict, client: Chat, *, seed: int = 0, attempts: int = 2
             messages, temperature=temperature, seed=seed + attempt, max_tokens=max_tokens
         )
         try:
-            result = parse_judge_output(reply.get("content") or "")
+            result = parse_judge_output(judge_answer(reply))
         except JudgeParseError as error:
             last = error
             continue
@@ -197,6 +210,7 @@ def run_judging(
     *,
     threshold: float = MEAN_THRESHOLD,
     limit: int | None = None,
+    model: str = JUDGE_MODEL,
     should_stop: Callable[[], bool] = lambda: False,
     log: Callable[[str], None] = lambda _: None,
 ) -> dict:
@@ -215,7 +229,7 @@ def run_judging(
         try:
             result = judge_sample(sample, client, seed=sample["meta"]["seed"])
             keep, reasons = decide(result, threshold)
-            judge = {**result.to_dict(), "model": TEACHER_MODEL, "keep": keep, "rejection": reasons}
+            judge = {**result.to_dict(), "model": model, "keep": keep, "rejection": reasons}
         except TeacherOutputError as error:
             judge = {"keep": False, "rejection": ["judge_unparseable"], "reason": str(error)}
             keep = False

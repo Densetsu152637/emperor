@@ -59,7 +59,7 @@ Phases (`--skip <phase>` skips one; every phase is resumable):
    clarify, docs, architecture, long input and quick answers, from vague to specific. Each
    candidate is checked against `tasks/heldout`, `tasks/e2e` and `tasks/longctx` with a 3-gram
    overlap test (Jaccard similarity or containment of 0.4 or more is dropped).
-2. **generate**: gpt-oss-20b (Apache-2.0, `D:\AI-Models\unsloth\gpt-oss-20b-GGUF`) served by
+2. **generate**: gpt-oss-120b (Apache-2.0, F16 GGUF in `D:\AI-Models\unsloth\gpt-oss-120b-GGUF`) served by
    `llama-server` plays Emperor with `emperor-root.md`, the brief/plan/question shapes and the
    target style: concise and structured, big picture first, delegates instead of pasting code,
    few emojis, no walls of tables, searches instead of recalling facts, never handles
@@ -67,7 +67,9 @@ Phases (`--skip <phase>` skips one; every phase is resumable):
    only the plain Emperor prompt, so the style is learned rather than instructed. Each assistant
    turn keeps the teacher's reasoning for it as `reasoning_content`; the teacher runs at low
    reasoning effort (`--reasoning-effort`) to keep traces short.
-3. **judge**: the same model (at `--judge-reasoning-effort`, default medium) scores each trace 1-5 on eight criteria and answers pass or fail as
+3. **judge**: Qwen3.8-27B (`--judge-gguf`; a different family, so the teacher never grades its own
+   traces; thinking on unless `--no-judge-thinking`) on its own llama-server, never beside the
+   teacher, scores each trace 1-5 on eight criteria and answers pass or fail as
    JSON. A trace is kept when the judge passes it, the mean is at least 4.0 (`--threshold`), no
    criterion is below 3, and the emoji, table and pasted-code checks are clean. Schema checks run
    first: tool calls validate against the vendored schemas, roles alternate, briefs have Goal and
@@ -130,7 +132,7 @@ uv run --group train pipeline --detach --resume runs/<timestamp> --only export -
 ```
 
 Samples are append-only JSONL shards under `data/` (`traces/`, `rejects/`, `judged/`, `final/`).
-Each records its teacher (`gpt-oss-20b`), licence (`Apache-2.0`), seed and judge scores. The
+Each records its teacher (`gpt-oss-120b`), its judge model, licence (`Apache-2.0`), seed and judge scores. The
 steps can also be run alone: `uv run --group data data {prompts,generate,judge,retry,filter,report,validate}`
 and `uv run --group train train {show,fit,merge}`.
 

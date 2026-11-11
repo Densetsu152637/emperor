@@ -8,7 +8,9 @@ import json
 import time
 from urllib.parse import urlparse
 
-TEACHER_MODEL = "gpt-oss-20b"
+TEACHER_MODEL = "gpt-oss-120b"
+# The judge is a different model family, so the teacher does not grade its own traces.
+JUDGE_MODEL = "Qwen3.8-27B"
 TEACHER_LICENCE = "Apache-2.0"
 _LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
 
@@ -54,9 +56,11 @@ class ChatClient:
         base_url: str,
         model: str = TEACHER_MODEL,
         *,
-        timeout: float = 900.0,
+        timeout: float = 3600.0,
         retries: int = 3,
         reasoning_effort: str | None = GENERATE_EFFORT,
+        slot: int | None = None,
+        template_kwargs: dict | None = None,
     ):
         import httpx  # the `data` dependency group; imported lazily to keep the core light
 
@@ -64,6 +68,10 @@ class ChatClient:
         self.model = model
         self.retries = retries
         self.reasoning_effort = reasoning_effort
+        # A fixed llama-server slot per role (teacher, tool simulator) keeps each role's
+        # prompt cached, instead of reprocessing it whenever the other role ran.
+        self.slot = slot
+        self.template_kwargs = dict(template_kwargs or {})
         self._http = httpx.Client(timeout=timeout)
         self.tool_choice_supported = True  # cleared once the server rejects `tool_choice`
 
@@ -92,8 +100,13 @@ class ChatClient:
             body["tools"] = tools
             if tool_choice and self.tool_choice_supported:
                 body["tool_choice"] = tool_choice
+        kwargs = dict(self.template_kwargs)
         if self.reasoning_effort:
-            body["chat_template_kwargs"] = {"reasoning_effort": self.reasoning_effort}
+            kwargs["reasoning_effort"] = self.reasoning_effort
+        if kwargs:
+            body["chat_template_kwargs"] = kwargs
+        if self.slot is not None:
+            body["id_slot"] = self.slot
         last: Exception | None = None
         server_rejected = 0
         for attempt in range(self.retries):

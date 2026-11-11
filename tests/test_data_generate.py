@@ -89,7 +89,7 @@ def test_trace_is_multi_turn_valid_and_records_provenance():
     assert reason is None
     roles = [m["role"] for m in sample["messages"]]
     assert roles == ["system", "user", "assistant", "tool", "assistant", "tool", "assistant"]
-    assert sample["meta"]["teacher"] == "gpt-oss-20b"
+    assert sample["meta"]["teacher"] == "gpt-oss-120b"
     assert sample["meta"]["licence"] == "Apache-2.0"
     assert sample["meta"]["seed"] == 11
     # The environment role answered the await; the spawn result is deterministic.

@@ -64,6 +64,15 @@ def build_parser() -> argparse.ArgumentParser:
         if name in ("judge", "retry"):
             p.add_argument("--threshold", type=float, default=4.0)
             p.add_argument("--judge-reasoning-effort", default=JUDGE_EFFORT, choices=EFFORTS)
+            p.add_argument(
+                "--judge-base-url",
+                help="the judge's server (a different model from the teacher); default --base-url",
+            )
+            p.add_argument(
+                "--no-judge-thinking",
+                action="store_true",
+                help="ask the judge to answer without thinking first",
+            )
 
     sub.add_parser("filter", help="keep judged passes in data/final/final.jsonl")
     sub.add_parser("report", help="write data/report.json")
@@ -121,7 +130,7 @@ def cmd_retry(args) -> int:
     from emperor.data.teacher import ChatClient, TeacherSetupError
 
     client = ChatClient(args.base_url, reasoning_effort=args.reasoning_effort)
-    judge_client = ChatClient(args.base_url, reasoning_effort=args.judge_reasoning_effort)
+    judge_client = judge_chat_client(args)
     environment = ChatClient(args.base_url, reasoning_effort=args.environment_reasoning_effort)
     try:
         counts = run_retry_rounds(
@@ -145,11 +154,21 @@ def cmd_retry(args) -> int:
     return 0
 
 
+def judge_chat_client(args):
+    from emperor.data.teacher import JUDGE_MODEL, ChatClient
+
+    return ChatClient(
+        args.judge_base_url or args.base_url,
+        model=JUDGE_MODEL,
+        reasoning_effort=args.judge_reasoning_effort,
+        template_kwargs={"enable_thinking": not args.no_judge_thinking},
+    )
+
+
 def cmd_judge(args) -> int:
     from emperor.data.judge import run_judging
-    from emperor.data.teacher import ChatClient
 
-    client = ChatClient(args.base_url, reasoning_effort=args.judge_reasoning_effort)
+    client = judge_chat_client(args)
     try:
         counts = run_judging(
             args.data_dir,
