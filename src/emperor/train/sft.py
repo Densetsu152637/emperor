@@ -16,14 +16,17 @@ log = logging.getLogger("emperor.train")
 PAUSED_EXIT_CODE = 75  # EX_TEMPFAIL: a checkpoint was saved and the run should be resumed
 
 
-def gpu_split(margin_gib: float = 1.5) -> dict:
-    """Free VRAM less a margin for the GPU, the rest from system RAM: training runs partly on the
-    GPU when another process holds some of it, and fully on it when the card is free."""
+def require_free_vram(min_gib: float) -> None:
+    """Stop before loading anything when another process holds the VRAM training needs. Layers
+    offloaded to the CPU break LoRA's backward pass, so training only runs fully on the GPU."""
     import torch
 
-    free, _total = torch.cuda.mem_get_info(0)
-    gpu_gib = max(free / 2**30 - margin_gib, 1.0)
-    return {0: f"{gpu_gib:.1f}GiB", "cpu": "48GiB"}
+    free_gib = torch.cuda.mem_get_info(0)[0] / 2**30
+    if free_gib < min_gib:
+        raise SystemExit(
+            f"only {free_gib:.1f} GiB of VRAM is free and training needs {min_gib:.1f} GiB; "
+            "close other GPU apps (games, browsers, llama-server) and resume the run"
+        )
 
 
 def cap_vram(margin_gib: float = 0.5) -> float:
@@ -58,7 +61,7 @@ def shrink_logprob_tiles(tokens: int = 1024) -> None:
 
 
 def log_placement(model) -> None:
-    """Say where the weights went; layers offloaded to the CPU make training far slower."""
+    """Say where the weights went."""
     devices: dict[str, int] = {}
     for param in model.parameters():
         devices[str(param.device)] = devices.get(str(param.device), 0) + param.numel()
@@ -66,8 +69,6 @@ def log_placement(model) -> None:
         "weights by device (millions of parameters): %s",
         {k: round(v / 1e6) for k, v in devices.items()},
     )
-    if any(not name.startswith("cuda") for name in devices):
-        log.warning("part of the model is on the CPU; training will be much slower")
 
 
 def _resolve(path: str, root: Path) -> Path:
@@ -113,6 +114,7 @@ def train(config: SftConfig, root: Path, pause_file: Path | None = None) -> int:
 
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is not available; check the torch build (cu128 for RTX 50 series)")
+    require_free_vram(config.model.min_free_vram_gib)
     log.info("VRAM cap for training: %.1f GiB", cap_vram())
     use_fused_attention()
     shrink_logprob_tiles()
@@ -124,8 +126,7 @@ def train(config: SftConfig, root: Path, pause_file: Path | None = None) -> int:
         base,
         dtype=torch.bfloat16,  # full-precision (bf16) weights; never quantised
         attn_implementation=config.model.attn_implementation,
-        device_map="auto",
-        max_memory=gpu_split(),
+        device_map={"": 0},
     )
     log_placement(model)
     model.config.use_cache = False

@@ -127,3 +127,16 @@ def test_gguf_export_is_optional(tmp_path, monkeypatch):
 def test_unpadded_batches_drop_the_attention_mask():
     batch = pad_batch([{"input_ids": [1, 2], "labels": [IGNORE, 2], "attention_mask": [1, 1]}], 0)
     assert "attention_mask" not in batch and batch["position_ids"] == [[0, 1]]
+
+
+def test_training_stops_when_vram_is_short(monkeypatch):
+    import sys
+    import types
+
+    from emperor.train.sft import require_free_vram
+
+    cuda = types.SimpleNamespace(mem_get_info=lambda device: (8 * 2**30, 16 * 2**30))
+    monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(cuda=cuda))
+    with pytest.raises(SystemExit, match="only 8.0 GiB of VRAM is free"):
+        require_free_vram(13.5)
+    require_free_vram(6.0)
