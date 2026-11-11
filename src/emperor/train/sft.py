@@ -48,6 +48,15 @@ def use_fused_attention() -> None:
     sdpa_attention.use_gqa_in_sdpa = lambda *args, **kwargs: False
 
 
+def shrink_logprob_tiles(tokens: int = 1024) -> None:
+    """TRL's fused loss projects `[4096 tokens, vocabulary chunk]` fp32 tiles (512 MiB each);
+    after the first optimiser step that no longer fits beside the optimiser state on 16 GB.
+    Quarter-size tiles cost little speed."""
+    from trl.kernels import chunked_logprob
+
+    chunked_logprob.TOKEN_CHUNK_SIZE = tokens
+
+
 def log_placement(model) -> None:
     """Say where the weights went; layers offloaded to the CPU make training far slower."""
     devices: dict[str, int] = {}
@@ -106,6 +115,7 @@ def train(config: SftConfig, root: Path, pause_file: Path | None = None) -> int:
         raise SystemExit("CUDA is not available; check the torch build (cu128 for RTX 50 series)")
     log.info("VRAM cap for training: %.1f GiB", cap_vram())
     use_fused_attention()
+    shrink_logprob_tiles()
     base = Path(config.model.base)
     tokenizer = AutoTokenizer.from_pretrained(base)
     data = prepare_datasets(config, tokenizer, root)
