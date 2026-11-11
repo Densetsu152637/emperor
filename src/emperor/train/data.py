@@ -159,4 +159,9 @@ def pad_batch(batch: Sequence[dict], pad_token_id: int) -> dict[str, list[list[i
         out["input_ids"].append(list(item["input_ids"]) + [pad_token_id] * pad)
         out["labels"].append(list(item["labels"]) + [IGNORE] * pad)
         out["attention_mask"].append(list(item["attention_mask"]) + [0] * pad)
+    if all(all(row) for row in out["attention_mask"]):
+        # Nothing is masked: positions instead of a mask let SDPA use its memory-efficient causal
+        # kernel instead of the math path, whose L x L matrix overflows 16 GB on long samples.
+        del out["attention_mask"]
+        out["position_ids"] = [list(range(longest)) for _ in batch]
     return out
