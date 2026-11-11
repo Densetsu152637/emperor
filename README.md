@@ -65,8 +65,8 @@ Phases (`--skip <phase>` skips one; every phase is resumable):
    few emojis, no walls of tables, searches instead of recalling facts, never handles
    credentials. A separate "environment" call simulates the tool results. The stored sample keeps
    only the plain Emperor prompt, so the style is learned rather than instructed. Each assistant
-   turn keeps the teacher's reasoning for it as `reasoning_content`; the teacher runs at low
-   reasoning effort (`--reasoning-effort`) to keep traces short.
+   turn keeps the teacher's reasoning for it as `reasoning_content`; the teacher runs at medium
+   reasoning effort (`--reasoning-effort`); only the first turn of a trace must carry reasoning.
 3. **judge**: Qwen3.8-27B (`--judge-gguf`; a different family, so the teacher never grades its own
    traces; thinking on unless `--no-judge-thinking`) on its own llama-server, never beside the
    teacher, scores each trace 1-5 on eight criteria and answers pass or fail as

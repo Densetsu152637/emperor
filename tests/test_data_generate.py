@@ -207,14 +207,23 @@ def test_teacher_reasoning_is_stored_per_turn_and_kept_in_the_teachers_history()
     ]
 
 
-def test_a_turn_without_reasoning_rejects_the_trace():
+def test_a_first_turn_without_reasoning_rejects_the_trace():
     script = good_script()
-    script[1] = {**script[1], "reasoning_content": None}
+    script[0] = {**script[0], "reasoning_content": None}
     sample, reason = generate_trace(record(), ScriptedTeacher(script), FakeEnv())
     assert (sample, reason) == (None, "no_reasoning")
     config = GenerationConfig(require_reasoning=False)
     sample, reason = generate_trace(record(), ScriptedTeacher(script), FakeEnv(), config)
-    assert reason is None and "reasoning_content" not in sample["messages"][4]
+    assert reason is None and "reasoning_content" not in sample["messages"][2]
+
+
+def test_a_later_turn_without_reasoning_is_kept_as_is():
+    script = good_script()
+    script[1] = {**script[1], "reasoning_content": None}
+    sample, reason = generate_trace(record(), ScriptedTeacher(script), FakeEnv())
+    assert reason is None
+    assert "reasoning_content" not in sample["messages"][4]
+    assert sample["messages"][2]["reasoning_content"] == REASONING
 
 
 class ForcedToolHidesReasoning:
@@ -263,7 +272,7 @@ def test_generation_defaults_to_low_reasoning_effort():
     from emperor.data.teacher import ChatClient
 
     args = build_parser().parse_args(["retry"])
-    assert (args.reasoning_effort, args.judge_reasoning_effort) == ("low", "medium")
+    assert (args.reasoning_effort, args.judge_reasoning_effort) == ("medium", "medium")
     assert args.environment_reasoning_effort == "medium"
     assert build_parser().parse_args(["judge"]).judge_reasoning_effort == "medium"
-    assert ChatClient.__init__.__kwdefaults__["reasoning_effort"] == "low"
+    assert ChatClient.__init__.__kwdefaults__["reasoning_effort"] == "medium"

@@ -39,9 +39,10 @@ def require_local(base_url: str) -> str:
     return base_url.rstrip("/")
 
 
-# Generation runs the teacher at low effort: its reasoning is stored and trained on, and short
-# reasoning keeps traces within the student's training length. Judging keeps medium.
-GENERATE_EFFORT = "low"
+# Generation runs the teacher at medium effort: its reasoning is stored and trained on. In the
+# pilot, low effort gave about 6 tokens of reasoning a turn, too little to learn from; medium
+# gave about 360 and still kept every sample under 8192 tokens.
+GENERATE_EFFORT = "medium"
 JUDGE_EFFORT = "medium"
 ENVIRONMENT_EFFORT = "medium"  # the tool-result simulator: its output is context, not trained
 EFFORTS = ("low", "medium", "high")

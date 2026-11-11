@@ -160,8 +160,7 @@ def thinking_render(messages, add_generation_prompt):
             text += f"<|im_start|>{message['role']}\n{content}<|im_end|>\n"
             continue
         reasoning = message.get("reasoning_content") or ""
-        last = i == len(messages) - 1
-        if i > query and (last or reasoning):
+        if i > query:  # Qwen3.5 writes the block, empty or not, on every turn of the loop
             text += f"<|im_start|>assistant\n<think>\n{reasoning.strip()}\n</think>\n\n{content}"
         else:
             text += f"<|im_start|>assistant\n{content}"
@@ -199,13 +198,21 @@ def test_reasoning_spans_train_the_reasoning_and_answer_of_every_turn():
     assert all(full[a - len("<think>\n") : a] == "<think>\n" for a, _ in spans)
 
 
-def test_a_turn_without_reasoning_is_refused_for_a_thinking_base():
+def test_only_the_first_turn_must_have_reasoning():
     messages = thinking_messages()
-    del messages[4]["reasoning_content"]
+    del messages[2]["reasoning_content"]
     with pytest.raises(MissingReasoning):
         reasoning_spans(messages, thinking_render)
     with pytest.raises(MissingReasoning):
         reasoning_spans(thinking_messages(with_reasoning=False), thinking_render)
+    # A later turn without reasoning is trained with an empty think block.
+    messages = thinking_messages()
+    del messages[4]["reasoning_content"]
+    full, spans = reasoning_spans(messages, thinking_render)
+    assert (
+        full[spans[1][0] : spans[1][1]]
+        == "\n</think>\n\n<tool_call>await_tasks</tool_call><|im_end|>"
+    )
 
 
 def test_turns_before_the_last_user_message_are_context_only():
