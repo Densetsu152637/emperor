@@ -6,6 +6,7 @@ rest of the package and its tests never load them. The base model directory is o
 
 import json
 import logging
+import time
 from pathlib import Path
 
 from emperor.train.config import SftConfig
@@ -23,6 +24,31 @@ def gpu_split(margin_gib: float = 1.5) -> dict:
     free, _total = torch.cuda.mem_get_info(0)
     gpu_gib = max(free / 2**30 - margin_gib, 1.0)
     return {0: f"{gpu_gib:.1f}GiB", "cpu": "48GiB"}
+
+
+def cap_vram(margin_gib: float = 0.5) -> float:
+    """Cap PyTorch's allocator at the VRAM free now, less a margin. On Windows the driver
+    otherwise spills overflow into shared system memory and training crawls (hours per step)
+    instead of failing; with the cap, running out raises an out-of-memory error at once."""
+    import torch
+
+    free, total = torch.cuda.mem_get_info(0)
+    fraction = max(min((free - margin_gib * 2**30) / total, 1.0), 0.1)
+    torch.cuda.set_per_process_memory_fraction(fraction, 0)
+    return fraction * total / 2**30
+
+
+def log_placement(model) -> None:
+    """Say where the weights went; layers offloaded to the CPU make training far slower."""
+    devices: dict[str, int] = {}
+    for param in model.parameters():
+        devices[str(param.device)] = devices.get(str(param.device), 0) + param.numel()
+    log.info(
+        "weights by device (millions of parameters): %s",
+        {k: round(v / 1e6) for k, v in devices.items()},
+    )
+    if any(not name.startswith("cuda") for name in devices):
+        log.warning("part of the model is on the CPU; training will be much slower")
 
 
 def _resolve(path: str, root: Path) -> Path:
@@ -68,6 +94,7 @@ def train(config: SftConfig, root: Path, pause_file: Path | None = None) -> int:
 
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is not available; check the torch build (cu128 for RTX 50 series)")
+    log.info("VRAM cap for training: %.1f GiB", cap_vram())
     base = Path(config.model.base)
     tokenizer = AutoTokenizer.from_pretrained(base)
     data = prepare_datasets(config, tokenizer, root)
@@ -79,6 +106,7 @@ def train(config: SftConfig, root: Path, pause_file: Path | None = None) -> int:
         device_map="auto",
         max_memory=gpu_split(),
     )
+    log_placement(model)
     model.config.use_cache = False
     if config.train.gradient_checkpointing:
         model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
@@ -140,6 +168,33 @@ def train(config: SftConfig, root: Path, pause_file: Path | None = None) -> int:
                 control.should_training_stop = True
             return control
 
+    class StepTimer(TrainerCallback):
+        """Log every micro-step with its duration, so a stall shows in the log within minutes."""
+
+        def __init__(self):
+            self.start = time.monotonic()
+            self.micro = 0
+
+        def _tick(self, state, what):
+            now = time.monotonic()
+            self.micro += 1
+            log.info(
+                "%s %d (optimiser step %d/%d): %.1fs, peak VRAM %.1f GiB",
+                what,
+                self.micro,
+                state.global_step,
+                state.max_steps,
+                now - self.start,
+                _peak_gib(torch),
+            )
+            self.start = now
+
+        def on_substep_end(self, args, state, control, **kwargs):
+            self._tick(state, "micro-step")
+
+        def on_step_end(self, args, state, control, **kwargs):
+            self._tick(state, "micro-step")
+
     trainer = SFTTrainer(
         model=model,
         args=args,
@@ -154,7 +209,7 @@ def train(config: SftConfig, root: Path, pause_file: Path | None = None) -> int:
             target_modules=config.lora.target_modules,
             task_type="CAUSAL_LM",
         ),
-        callbacks=[PauseOnFile()],
+        callbacks=[PauseOnFile(), StepTimer()],
     )
     resume = get_last_checkpoint(str(output_dir)) if output_dir.exists() else None
     log.info("resuming from %s", resume) if resume else log.info("starting a new run")

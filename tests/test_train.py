@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def test_shipped_config_loads_and_is_bf16_lora():
     config = load_config(ROOT / "configs" / "sft.toml")
     assert config.dtype == "bfloat16"
-    assert config.data.max_length == 8192
+    assert config.data.max_length == 6144
     assert config.model.base.endswith("Qwen3-4B-Instruct-2507")
     assert config.merge.output_dir == "weights/emperor-4b-bf16"
     assert config.train.save_steps > 0 and config.train.gradient_checkpointing
