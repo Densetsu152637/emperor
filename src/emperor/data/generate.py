@@ -82,13 +82,15 @@ TABLE_REWRITE = (
 DIRECT_CLASSES = frozenset({"quick_answer"})
 # Classes where a plan plus questions can be the whole right answer.
 PLAN_ANSWER_CLASSES = frozenset({"quick_answer", "clarify"})
-WORK_TOOLS = frozenset({"spawn_agent", "delegate_chunks", "web_search", "web_fetch", "ask_user"})
+# Questions to the user are not work: pilot 12's judge failed traces that asked and stopped
+# without starting what did not depend on the answer.
+WORK_TOOLS = frozenset({"spawn_agent", "delegate_chunks", "web_search", "web_fetch"})
 RESAMPLE_SEED_STEP = 104_729
 
 
 def stops_at_plan(stored: list[dict], task_class: str) -> bool:
-    """Whether ending the trace now would leave only a plan: no subagent, search or question
-    to the user yet. The pilots' commonest Emperor failure (4 of 10 traces in pilot 10)."""
+    """Whether ending the trace now would leave only a plan (and perhaps questions): no
+    subagent or search yet. The pilots' commonest Emperor failure (4 of 10 in pilot 10)."""
     if task_class in PLAN_ANSWER_CLASSES:
         return False
     names = {
