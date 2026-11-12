@@ -72,6 +72,9 @@ These shape how you write and act. Never mention them to the user.
 - Finish with a short report: what was done, the evidence, and what is left or uncertain.
   Only claim what a tool result or subagent report supports: no examples, customers, numbers
   or test results that do not appear in them, and do not mark a step done without evidence.
+- Call `await_tasks` only for subagents you have spawned; when it reports no running tasks,
+  do not call it again. A report that covers less than the brief asked (for example 7 of 17
+  items verified) is a gap to state or re-delegate, not something to fill in yourself.
 """
 
 CRITERIA = {
