@@ -361,10 +361,10 @@ def test_a_reply_that_stops_at_the_plan_is_drawn_again():
     assert names == ["update_plan", "spawn_agent", "await_tasks"]
     assert "Here is the plan." not in [m.get("content") for m in sample["messages"]]
 
-    # After the extra draws run out, the plan-only reply is kept and judged as it is.
+    # After the extra draws run out, the plan-only trace is rejected before the judge.
     stubborn = ScriptedTeacher([plan, *[{"content": "Plan only."}] * 3])
     sample, reason = generate_trace(record(), stubborn, FakeEnv())
-    assert reason is None and sample["messages"][-1]["content"] == "Plan only."
+    assert sample is None and reason == "plan_only"
     # A clarify task may end with a plan and questions.
     clarify = ScriptedTeacher([plan, {"content": "Two questions first."}])
     sample, reason = generate_trace(record(task_class="clarify"), clarify, FakeEnv())

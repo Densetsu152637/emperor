@@ -421,6 +421,10 @@ def generate_trace(
         calls = _normalise_calls(reply.get("tool_calls") or [], counter)
         if not calls and not content:
             return None, "empty_reply"
+        # Still only a plan after every draw: the judge failed each such trace in pilots 10-14
+        # (it asks or restates and does nothing), so it is rejected here, before judge time.
+        if not calls and stops_at_plan(stored, record.task_class):
+            return None, "plan_only"
         reasoning = reasoning_of(reply)
         if config.require_reasoning and turn == 0 and not reasoning:
             return None, "no_reasoning"
