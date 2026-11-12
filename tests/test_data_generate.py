@@ -344,3 +344,28 @@ def test_the_simulator_sees_its_earlier_results():
     env.run("web_fetch", {"url": "https://example.com"})
     assert "Results already given" not in env_client.requests[0]
     assert "Report: done. Evidence: all checks pass." in env_client.requests[1]
+
+
+def test_a_reply_that_stops_at_the_plan_is_drawn_again():
+    plan = tool_turn("update_plan", {"steps": [{"title": "a", "status": "pending"}]})
+    script = [plan, {"content": "Here is the plan."}, *good_script()]
+    teacher = ScriptedTeacher(script)
+    sample, reason = generate_trace(record(), teacher, FakeEnv())
+    assert reason is None
+    names = [
+        c["function"]["name"]
+        for m in sample["messages"]
+        if m["role"] == "assistant"
+        for c in m.get("tool_calls") or []
+    ]
+    assert names == ["update_plan", "spawn_agent", "await_tasks"]
+    assert "Here is the plan." not in [m.get("content") for m in sample["messages"]]
+
+    # After the extra draws run out, the plan-only reply is kept and judged as it is.
+    stubborn = ScriptedTeacher([plan, *[{"content": "Plan only."}] * 3])
+    sample, reason = generate_trace(record(), stubborn, FakeEnv())
+    assert reason is None and sample["messages"][-1]["content"] == "Plan only."
+    # A clarify task may end with a plan and questions.
+    clarify = ScriptedTeacher([plan, {"content": "Two questions first."}])
+    sample, reason = generate_trace(record(task_class="clarify"), clarify, FakeEnv())
+    assert reason is None and len(clarify.seen) == 2

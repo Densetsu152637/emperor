@@ -68,6 +68,8 @@ class GenerationConfig:
     # pilot-6 traces, each about 13 minutes of teacher time). It is asked once to rewrite that
     # reply as a list before the trace is rejected as `markdown_table`.
     rewrite_tables: bool = True
+    # Extra draws of a final reply that would leave only a plan (see `stops_at_plan`).
+    plan_only_resamples: int = 2
 
 
 TABLE_REWRITE = (
@@ -78,6 +80,26 @@ TABLE_REWRITE = (
 
 # Classes where answering without any tool is the right behaviour.
 DIRECT_CLASSES = frozenset({"quick_answer"})
+# Classes where a plan plus questions can be the whole right answer.
+PLAN_ANSWER_CLASSES = frozenset({"quick_answer", "clarify"})
+WORK_TOOLS = frozenset({"spawn_agent", "delegate_chunks", "web_search", "web_fetch", "ask_user"})
+RESAMPLE_SEED_STEP = 104_729
+
+
+def stops_at_plan(stored: list[dict], task_class: str) -> bool:
+    """Whether ending the trace now would leave only a plan: no subagent, search or question
+    to the user yet. The pilots' commonest Emperor failure (4 of 10 traces in pilot 10)."""
+    if task_class in PLAN_ANSWER_CLASSES:
+        return False
+    names = {
+        call["function"]["name"]
+        for message in stored
+        if message["role"] == "assistant"
+        for call in message.get("tool_calls") or []
+    }
+    return bool(names) and not names & WORK_TOOLS
+
+
 ATTEMPT_SEED_STEP = 1_000_003
 ROUND_SEED_STEP = 7_000_001
 SEED_MASK = 0x7FFFFFFF
@@ -370,14 +392,19 @@ def generate_trace(
     for turn in range(config.max_turns):
         force = turn == 0 and requires_tools and config.force_first_tool
         extra = {"tool_choice": "required"} if force else {}
-        reply = teacher.chat(
-            teacher_messages,
-            tools=teacher_tools(record.tools),
-            temperature=config.temperature,
-            seed=(base_seed + turn) & SEED_MASK,
-            max_tokens=config.max_tokens,
-            **extra,
-        )
+        for resample in range(config.plan_only_resamples + 1):
+            reply = teacher.chat(
+                teacher_messages,
+                tools=teacher_tools(record.tools),
+                temperature=config.temperature,
+                seed=(base_seed + turn + resample * RESAMPLE_SEED_STEP) & SEED_MASK,
+                max_tokens=config.max_tokens,
+                **extra,
+            )
+            # A reply that ends the task while the only thing done is a plan is drawn again
+            # (another seed); the stored trace keeps only the turn that was used.
+            if reply.get("tool_calls") or not stops_at_plan(stored, record.task_class):
+                break
         content = (reply.get("content") or "").strip()
         calls = _normalise_calls(reply.get("tool_calls") or [], counter)
         if not calls and not content:
