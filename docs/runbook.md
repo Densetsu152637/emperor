@@ -31,11 +31,11 @@ stages out. Record each stage's outcome in the plan when it is done.
 | --- | --- |
 | Eval harness (stage 2b) | this repository, `uv run eval` |
 | Tool contract and prompts | vendored under `src/emperor/eval/vendor/` (pin in `SOURCE`) |
-| Lead base, bf16 (Qwen3.5-4B, thinking on by default, Apache-2.0) | `D:/AI-Models/Qwen/Qwen3.5-4B/` |
+| Lead base, bf16 (Qwen3.5-4B, thinking on by default, Apache-2.0) | `F:/AI-Models/Qwen/Qwen3.5-4B/` |
 | Round 1 base, bf16 (non-thinking) | `D:/AI-Models/unsloth/Qwen3-4B-Instruct-2507/` |
 | Lead base, Q4_K_M GGUF | `D:/AI-Models/unsloth/Qwen3-4B-Instruct-2507-GGUF/` |
 | Fallback base, Q4_K_M GGUF | `D:/AI-Models/unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf` |
-| Local teacher, F16 GGUF | `D:/AI-Models/unsloth/gpt-oss-120b-GGUF/gpt-oss-120b-F16.gguf` |
+| Local teacher, F16 GGUF | `F:/AI-Models/unsloth/gpt-oss-120b-GGUF/gpt-oss-120b-F16.gguf` |
 | Local judge, Q4_K_XL GGUF | `D:/AI-Models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf` |
 | Round 1 teacher and judge | `D:/AI-Models/unsloth/gpt-oss-20b-GGUF/gpt-oss-20b-Q4_K_M.gguf` |
 | llama.cpp runtime | Imperium's pinned build (`runtimes/llama-cpp.env` in Imperium-AI) |

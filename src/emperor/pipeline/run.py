@@ -59,7 +59,7 @@ PHASES = [
     "eval",
     "card",
 ]
-DEFAULT_TEACHER_GGUF = "D:/AI-Models/unsloth/gpt-oss-120b-GGUF/gpt-oss-120b-F16.gguf"
+DEFAULT_TEACHER_GGUF = "F:/AI-Models/unsloth/gpt-oss-120b-GGUF/gpt-oss-120b-F16.gguf"
 DEFAULT_JUDGE_GGUF = "D:/AI-Models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf"
 # The teacher server keeps one slot per role, so the teacher's growing conversation and the
 # tool simulator's short prompts each stay cached instead of evicting each other.

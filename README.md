@@ -59,7 +59,7 @@ Phases (`--skip <phase>` skips one; every phase is resumable):
    clarify, docs, architecture, long input and quick answers, from vague to specific. Each
    candidate is checked against `tasks/heldout`, `tasks/e2e` and `tasks/longctx` with a 3-gram
    overlap test (Jaccard similarity or containment of 0.4 or more is dropped).
-2. **generate**: gpt-oss-120b (Apache-2.0, F16 GGUF in `D:\AI-Models\unsloth\gpt-oss-120b-GGUF`) served by
+2. **generate**: gpt-oss-120b (Apache-2.0, F16 GGUF in `F:\AI-Models\unsloth\gpt-oss-120b-GGUF`) served by
    `llama-server` plays Emperor with `emperor-root.md`, the brief/plan/question shapes and the
    target style: concise and structured, big picture first, delegates instead of pasting code,
    few emojis, no walls of tables, searches instead of recalling facts, never handles
@@ -77,7 +77,7 @@ Phases (`--skip <phase>` skips one; every phase is resumable):
    patterns).
 4. **filter**: writes `data/final/final.jsonl` and `data/report.json` (counts, pass rate, score
    histograms, rejection reasons).
-5. **train**: `configs/sft.toml`, bf16 LoRA on `D:\AI-Models\Qwen\Qwen3.5-4B` (Apache-2.0;
+5. **train**: `configs/sft.toml`, bf16 LoRA on `F:\AI-Models\Qwen\Qwen3.5-4B` (Apache-2.0;
    the text model only, without the vision encoder or the multi-token-prediction head) with TRL,
    gradient checkpointing, assistant-only loss (the teacher's reasoning, rendered as the
    template's `<think>` block, is trained too; samples without reasoning are skipped and counted
