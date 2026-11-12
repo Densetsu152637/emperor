@@ -74,7 +74,18 @@ SERVER_LOAD_SECONDS = 3600.0
 # One KV buffer shared by the two role slots (the simulator's prompts are short), and a
 # smaller VRAM margin: every GiB of GPU memory not spent on KV holds experts that would
 # otherwise compete for RAM.
-TEACHER_SERVER_ARGS = ["--cache-ram", "0", "--no-repack", "--no-op-offload", "--kv-unified"]
+# Eight CPU threads, one per performance core of this machine's i7-13700KF. With llama.cpp's
+# default thread count, any background load stalls the threads that land on efficiency cores and
+# generation fell to 3-4 tok/s; with 8 it ran at 27-32 tok/s under the same load.
+TEACHER_THREADS = ["-t", "8"]  # the 27B judge runs at the same speed either way
+TEACHER_SERVER_ARGS = [
+    "--cache-ram",
+    "0",
+    "--no-repack",
+    "--no-op-offload",
+    "--kv-unified",
+    *TEACHER_THREADS,
+]
 TEACHER_VRAM_MARGIN_MIB = 512
 
 
