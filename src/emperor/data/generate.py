@@ -63,9 +63,12 @@ SEED_MASK = 0x7FFFFFFF
 
 
 def teacher_system(context_tokens: int) -> str:
-    """What the teacher is told: the real prompt, the artefact shapes and the style."""
+    """What the teacher is told: the real prompt, the artefact shapes and the style, with the
+    context-budget line last. Everything before it is the same for every task, so the teacher
+    server reuses its cached prefix instead of reprocessing about 2,000 tokens per task."""
     shapes = "\n\n".join(prompt(name).strip() for name in ("plan", "questions", "brief"))
-    return f"{system_prompt(context_tokens).rstrip()}\n\n{shapes}\n\n{STYLE}"
+    budget = system_prompt(context_tokens).rstrip().rsplit("\n", 1)[1]
+    return f"{prompt('emperor-root').rstrip()}\n\n{shapes}\n\n{STYLE}\n{budget}\n"
 
 
 _ENV_SYSTEM = """\

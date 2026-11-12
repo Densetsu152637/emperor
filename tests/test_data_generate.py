@@ -276,3 +276,13 @@ def test_generation_defaults_to_low_reasoning_effort():
     assert args.environment_reasoning_effort == "medium"
     assert build_parser().parse_args(["judge"]).judge_reasoning_effort == "medium"
     assert ChatClient.__init__.__kwdefaults__["reasoning_effort"] == "medium"
+
+
+def test_the_teacher_prompt_differs_between_tasks_only_at_its_end():
+    from emperor.data.generate import teacher_system
+
+    small, large = teacher_system(32 * 1024), teacher_system(128 * 1024)
+    assert small.rstrip().endswith("context budget: 32K tokens")
+    assert large.rstrip().endswith("context budget: 128K tokens")
+    shared = len(small.rstrip().rsplit("\n", 1)[0])
+    assert small[:shared] == large[:shared] and shared > 0.95 * len(small)
