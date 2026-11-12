@@ -100,9 +100,9 @@ wrapper unless the tool would return one.
 Rules:
 - web_search: return 4 to 6 results, each as a title, a plausible https URL and a one-line
   snippet, one per line. Content must be realistic and consistent with what is known.
-- web_fetch: return the readable text of the page, 150 to 400 words, with concrete facts.
+- web_fetch: return the readable text of the page, 120 to 280 words, with concrete facts.
 - A subagent report (await_tasks): write the report the subagent would send for its brief,
-  following the brief's "Output format", 80 to 250 words, with concrete evidence for each
+  following the brief's "Output format", 60 to 180 words, with concrete evidence for each
   acceptance check. Occasionally (about one time in six) report a genuine problem or a failed
   check, so the assistant has to re-plan.
 - ask_user: write the user's answers, one line per question, as a normal person would; accept
