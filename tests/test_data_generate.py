@@ -297,3 +297,27 @@ def test_a_trace_longer_than_the_training_length_is_rejected_early():
     assert len(teacher.seen) == 1  # stopped after the first turn's tool result
     sample, reason = generate_trace(record(), ScriptedTeacher(good_script()), FakeEnv())
     assert reason is None
+
+
+class BatchEnv:
+    """Answers a batched await with one section per subagent."""
+
+    def __init__(self):
+        self.requests = []
+
+    def chat(self, messages, **kwargs):
+        self.requests.append(messages[-1]["content"])
+        return {"content": "### t1\nReport one.\n\n### `t2`\nReport two."}
+
+
+def test_awaited_reports_come_from_one_simulator_call():
+    client = BatchEnv()
+    env = Environment(client, "task", seed=1)
+    env.run("spawn_agent", {"brief": BRIEF})
+    env.run("spawn_agent", {"brief": BRIEF})
+    reports = json.loads(env.run("await_tasks", {}))["reports"]
+    assert [(r["task_id"], r["report"]) for r in reports] == [
+        ("t1", "Report one."),
+        ("t2", "Report two."),
+    ]
+    assert len(client.requests) == 1 and "2 subagents" in client.requests[0]

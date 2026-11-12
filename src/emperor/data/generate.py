@@ -7,6 +7,7 @@ the teacher's reasoning for it as `reasoning_content` (the contract shared with 
 """
 
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -122,7 +123,7 @@ class Environment:
         self.pending: dict[str, str] = {}  # task id -> brief
         self.calls = 0
 
-    def _ask(self, request: str) -> str:
+    def _ask(self, request: str, max_tokens: int | None = None) -> str:
         self.calls += 1
         reply = self.client.chat(
             [
@@ -131,7 +132,7 @@ class Environment:
             ],
             temperature=0.8,
             seed=self.seed + self.calls,
-            max_tokens=self.max_tokens,
+            max_tokens=max_tokens or self.max_tokens,
         )
         return (reply.get("content") or "").strip() or "(no output)"
 
@@ -180,13 +181,15 @@ class Environment:
 
     def _await(self, arguments: dict) -> str:
         wanted = arguments.get("task_ids") or list(self.pending)
+        known = {t: self.pending.pop(t) for t in wanted if t in self.pending}
+        written = self._batch_reports(known) if len(known) > 1 else {}
         reports = []
         for task_id in wanted:
-            brief = self.pending.pop(task_id, None)
+            brief = known.get(task_id)
             if brief is None:
                 reports.append({"task_id": task_id, "status": "unknown_task"})
                 continue
-            text = self._ask(
+            text = written.get(task_id) or self._ask(
                 f"User task: {self.task_text}\n\nTool: await_tasks, subagent {task_id}\n"
                 f"The subagent's brief was:\n{brief}\n\nWrite its report."
             )
@@ -194,6 +197,26 @@ class Environment:
         if not reports:
             return json.dumps({"reports": [], "note": "no running tasks"})
         return json.dumps({"reports": reports}, ensure_ascii=False)
+
+    def _batch_reports(self, briefs: dict[str, str]) -> dict[str, str]:
+        """All awaited reports from one simulator call (a chunked job awaits up to 13 at once,
+        which took one call each); any report it does not deliver is written on its own."""
+        parts = "\n\n".join(
+            f"Subagent {task_id}. Its brief was:\n{brief}" for task_id, brief in briefs.items()
+        )
+        text = self._ask(
+            f"User task: {self.task_text}\n\nTool: await_tasks, {len(briefs)} subagents.\n\n"
+            f"{parts}\n\nWrite each subagent's report, in this order. Start each one with a line "
+            "holding only `### <subagent id>` (for example `### t1`), then the report.",
+            max_tokens=min(8192, self.max_tokens * len(briefs)),
+        )
+        found = {}
+        for block in re.split(r"(?m)^###\s*", text)[1:]:
+            head, _, body = block.partition("\n")
+            task_id = head.strip().strip("`*: ")
+            if task_id in briefs and body.strip():
+                found[task_id] = body.strip()
+        return found
 
 
 def _normalise_calls(raw_calls: list[dict], counter: list[int]) -> list[dict]:
