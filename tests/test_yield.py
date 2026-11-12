@@ -53,9 +53,26 @@ def test_markdown_tables_are_rejected_at_generation():
     table = "\n".join(["| a | b |"] * 6)
     script = good_script()
     script[-1] = {"content": table}
-    sample, reason = generate_trace(record(), ScriptedTeacher(script), FakeEnv())
+    # The teacher is asked once to rewrite the table; it answers with another table.
+    teacher = ScriptedTeacher([*script, {"content": table}])
+    sample, reason = generate_trace(record(), teacher, FakeEnv())
     assert sample is None and reason == "markdown_table"
+    assert "no Markdown table" in teacher.seen[-1][0][-1]["content"]
     assert table_rows(table) == 6
+    off = GenerationConfig(rewrite_tables=False)
+    sample, reason = generate_trace(record(), ScriptedTeacher(script), FakeEnv(), off)
+    assert reason == "markdown_table"
+
+
+def test_a_final_table_is_rewritten_by_the_teacher():
+    table = "\n".join(["| a | b |"] * 6)
+    script = good_script()
+    script[-1] = {"content": table, "reasoning_content": "Summarise."}
+    teacher = ScriptedTeacher([*script, {"content": "- a: b\n- a: b"}])
+    sample, reason = generate_trace(record(), teacher, FakeEnv())
+    assert reason is None
+    assert sample["messages"][-1]["content"] == "- a: b\n- a: b"
+    assert sample["messages"][-1]["reasoning_content"] == "Summarise."
 
 
 def test_style_forbids_tables_and_demands_tools_first():

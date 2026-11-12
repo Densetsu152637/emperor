@@ -62,6 +62,16 @@ class GenerationConfig:
     # The student's training length (configs/sft.toml max_length): longer traces are skipped
     # in training, so generation stops and rejects them (`too_long`) as soon as they pass it.
     max_sample_tokens: int | None = 8192
+    # gpt-oss puts Markdown tables into some final reports despite the style notes (2 of 10
+    # pilot-6 traces, each about 13 minutes of teacher time). It is asked once to rewrite that
+    # reply as a list before the trace is rejected as `markdown_table`.
+    rewrite_tables: bool = True
+
+
+TABLE_REWRITE = (
+    "Rewrite your last reply to the user with the same content but no Markdown table: turn each "
+    "table into a short bullet list. Reply with the rewritten text only."
+)
 
 
 # Classes where answering without any tool is the right behaviour.
@@ -341,6 +351,21 @@ def generate_trace(
 
     if requires_tools and not any(m.get("tool_calls") for m in stored[2:]):
         return None, "no_tool_use"
+    if (
+        config.rewrite_tables
+        and table_rows(stored[-1].get("content") or "") > MAX_TABLE_ROWS
+        and table_rows("\n".join(m.get("content") or "" for m in stored[2:-1])) <= MAX_TABLE_ROWS
+    ):
+        # The teacher rewrites its own final reply once; the trace is not thrown away for it.
+        rewrite = teacher.chat(
+            [*teacher_messages, {"role": "user", "content": TABLE_REWRITE}],
+            temperature=config.temperature,
+            seed=(base_seed + config.max_turns) & SEED_MASK,
+            max_tokens=config.max_tokens,
+        )
+        content = (rewrite.get("content") or "").strip()
+        if content:
+            stored[-1] = {**stored[-1], "content": content}
     if table_rows("\n".join(m.get("content") or "" for m in stored[2:])) > MAX_TABLE_ROWS:
         return None, "markdown_table"
 
