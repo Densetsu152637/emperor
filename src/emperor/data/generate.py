@@ -86,6 +86,7 @@ PLAN_ANSWER_CLASSES = frozenset({"quick_answer", "clarify"})
 # without starting what did not depend on the answer.
 WORK_TOOLS = frozenset({"spawn_agent", "delegate_chunks", "web_search", "web_fetch"})
 RESAMPLE_SEED_STEP = 104_729
+FORCE_WORK_TURNS = 3  # turns on which a tool call is required until work starts
 
 
 def stops_at_plan(stored: list[dict], task_class: str) -> bool:
@@ -392,7 +393,16 @@ def generate_trace(
     ]
     counter = [0]
     for turn in range(config.max_turns):
-        force = turn == 0 and requires_tools and config.force_first_tool
+        # A tool call is required on the first turn, and on the next ones while nothing but a
+        # plan (or a question) exists: in pilots 10-13 the teacher kept replying with the plan
+        # and questions even when every reply was drawn three times.
+        force = (
+            requires_tools
+            and config.force_first_tool
+            and (
+                turn == 0 or (turn < FORCE_WORK_TURNS and stops_at_plan(stored, record.task_class))
+            )
+        )
         extra = {"tool_choice": "required"} if force else {}
         for resample in range(config.plan_only_resamples + 1):
             reply = teacher.chat(

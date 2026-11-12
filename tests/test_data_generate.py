@@ -369,3 +369,13 @@ def test_a_reply_that_stops_at_the_plan_is_drawn_again():
     clarify = ScriptedTeacher([plan, {"content": "Two questions first."}])
     sample, reason = generate_trace(record(task_class="clarify"), clarify, FakeEnv())
     assert reason is None and len(clarify.seen) == 2
+
+
+def test_a_tool_call_is_required_until_work_starts():
+    plan = tool_turn("update_plan", {"steps": [{"title": "a", "status": "pending"}]})
+    teacher = ScriptedTeacher([plan, *good_script()])
+    sample, reason = generate_trace(record(), teacher, FakeEnv())
+    assert reason is None
+    forced = [k.get("tool_choice") for k in teacher.kwargs]
+    # Turn 0 (plan) and turn 1 (only a plan so far) are forced; after spawn_agent they are not.
+    assert forced == ["required", "required", None, None]
