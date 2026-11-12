@@ -234,7 +234,9 @@ def test_teacher_and_judge_run_on_their_own_servers(tmp_path, monkeypatch):
     )
     calls = []
 
-    def fake_server_phase(name, gguf, port, context, work, parallel=None, extra_args=None):
+    def fake_server_phase(
+        name, gguf, port, context, work, parallel=None, extra_args=None, vram_margin_mib=1536
+    ):
         calls.append((name, str(gguf), parallel, extra_args))
         return {"status": "done"}
 

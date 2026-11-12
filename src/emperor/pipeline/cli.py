@@ -92,7 +92,12 @@ def build_parser(prog: str = "pipeline", description: str | None = None) -> argp
     data.add_argument("--min-samples", type=int, default=100, help="kept traces needed to train")
     data.add_argument("--teacher-gguf", type=Path, default=Path(DEFAULT_TEACHER_GGUF))
     data.add_argument("--teacher-port", type=int, default=8081)
-    data.add_argument("--teacher-context", type=int, default=32768, help="tokens per slot")
+    data.add_argument(
+        "--teacher-context",
+        type=int,
+        default=12288,
+        help="tokens per slot; the teacher's two slots share one KV buffer",
+    )
     data.add_argument("--judge-gguf", type=Path, default=Path(DEFAULT_JUDGE_GGUF))
     data.add_argument("--judge-context", type=int, default=32768)
     data.add_argument(

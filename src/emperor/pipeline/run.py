@@ -71,7 +71,11 @@ SERVER_LOAD_SECONDS = 3600.0
 # weight stays file-backed and the OS can drop and re-read pages instead of swapping copies.
 # No op offload: by default every prompt-processing batch streams all CPU experts to the GPU,
 # which on this machine means paging all 51 GB in from disk for each 512-token batch.
-TEACHER_SERVER_ARGS = ["--cache-ram", "0", "--no-repack", "--no-op-offload"]
+# One KV buffer shared by the two role slots (the simulator's prompts are short), and a
+# smaller VRAM margin: every GiB of GPU memory not spent on KV holds experts that would
+# otherwise compete for RAM.
+TEACHER_SERVER_ARGS = ["--cache-ram", "0", "--no-repack", "--no-op-offload", "--kv-unified"]
+TEACHER_VRAM_MARGIN_MIB = 512
 
 
 @dataclass
@@ -88,7 +92,9 @@ class Settings:
     min_samples: int = 100
     teacher_gguf: Path = Path(DEFAULT_TEACHER_GGUF)
     teacher_port: int = 8081
-    teacher_context: int = 32768
+    # Per slot; the two slots share one 24K buffer. The longest pilot prompt was about 10K
+    # tokens plus a 4K reply.
+    teacher_context: int = 12288
     judge_gguf: Path = Path(DEFAULT_JUDGE_GGUF)
     judge_context: int = 32768  # transcript plus the judge's own thinking
     judge_thinking: bool = True
@@ -277,6 +283,7 @@ class Pipeline:
         work,
         parallel: int | None = None,
         extra_args: list[str] | None = None,
+        vram_margin_mib: int = 1536,
     ) -> dict:
         binary = find_llama_server(self.s.llama_server)
         if binary is None:
@@ -287,7 +294,9 @@ class Pipeline:
             parallel = self.s.parallel if name != "eval" else 1
 
         def start():
-            command = llama_server_command(binary, gguf, port, context, parallel)
+            command = llama_server_command(
+                binary, gguf, port, context, parallel, vram_margin_mib=vram_margin_mib
+            )
             command += extra_args or []
             server = ManagedProcess(command, self.s.run_dir / f"llama-{name}.log", self.own).start()
             log.info("%s: llama-server pid %s on port %d", name, server.pid, port)
@@ -342,6 +351,7 @@ class Pipeline:
             work,
             parallel=max(self.s.parallel, ENVIRONMENT_SLOT + 1),
             extra_args=TEACHER_SERVER_ARGS,
+            vram_margin_mib=TEACHER_VRAM_MARGIN_MIB,
         )
 
     def _judge_phase(self, name: str, work) -> dict:
