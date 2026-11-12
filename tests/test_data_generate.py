@@ -321,3 +321,26 @@ def test_awaited_reports_come_from_one_simulator_call():
         ("t2", "Report two."),
     ]
     assert len(client.requests) == 1 and "2 subagents" in client.requests[0]
+
+
+def test_the_teacher_must_set_tags_and_step_checks_the_student_schema_is_unchanged():
+    from emperor.data.generate import teacher_tools
+    from emperor.eval.contract import openai_tools
+
+    names = ["spawn_agent", "update_plan"]
+    teacher = {t["function"]["name"]: t["function"]["parameters"] for t in teacher_tools(names)}
+    real = {t["function"]["name"]: t["function"]["parameters"] for t in openai_tools(names)}
+    assert set(teacher["spawn_agent"]["required"]) == {"brief", "tier", "tags"}
+    assert real["spawn_agent"]["required"] == ["brief"]
+    step = teacher["update_plan"]["properties"]["steps"]["items"]["required"]
+    assert {"owner", "acceptance"} <= set(step)
+    assert "acceptance" not in real["update_plan"]["properties"]["steps"]["items"]["required"]
+
+
+def test_the_simulator_sees_its_earlier_results():
+    env_client = FakeEnv()
+    env = Environment(env_client, "task", seed=1)
+    env.run("web_search", {"query": "a"})
+    env.run("web_fetch", {"url": "https://example.com"})
+    assert "Results already given" not in env_client.requests[0]
+    assert "Report: done. Evidence: all checks pass." in env_client.requests[1]

@@ -6,6 +6,7 @@ style is what the student learns rather than what it is told. Each stored assist
 the teacher's reasoning for it as `reasoning_content` (the contract shared with Consul).
 """
 
+import copy
 import json
 import re
 from collections.abc import Callable
@@ -111,6 +112,10 @@ Never include credentials, API keys, tokens or private endpoints in any result.
 """
 
 
+ENV_HISTORY_RESULTS = 6  # earlier results the simulator sees, newest last
+ENV_HISTORY_CHARS = 1200  # of each
+
+
 class Environment:
     """Simulates tool results; ids and bookkeeping are deterministic, content comes from the LLM."""
 
@@ -122,9 +127,19 @@ class Environment:
         self.next_task = 1
         self.pending: dict[str, str] = {}  # task id -> brief
         self.calls = 0
+        self.history: list[str] = []  # earlier simulated results in this task
 
     def _ask(self, request: str, max_tokens: int | None = None) -> str:
+        """One simulated result, consistent with the ones already given in this task: written
+        independently, pages and reports contradicted each other (one pilot trace was failed for
+        not noticing three different issue counts for the same project)."""
         self.calls += 1
+        if self.history:
+            earlier = "\n\n".join(self.history[-ENV_HISTORY_RESULTS:])
+            request = (
+                f"Results already given in this session (stay consistent with every fact in "
+                f"them):\n{earlier}\n\n{request}"
+            )
         reply = self.client.chat(
             [
                 {"role": "system", "content": _ENV_SYSTEM},
@@ -134,7 +149,9 @@ class Environment:
             seed=self.seed + self.calls,
             max_tokens=max_tokens or self.max_tokens,
         )
-        return (reply.get("content") or "").strip() or "(no output)"
+        text = (reply.get("content") or "").strip() or "(no output)"
+        self.history.append(text[:ENV_HISTORY_CHARS])
+        return text
 
     def run(self, name: str, arguments: dict) -> str:
         if name == "update_plan":
@@ -242,6 +259,27 @@ def _normalise_calls(raw_calls: list[dict], counter: list[int]) -> list[dict]:
 TEACHER_REASONING_FIELD = "reasoning_content"
 
 
+# Fields Emperor's prompt requires but the tool schemas leave optional. The teacher ignored the
+# instruction to set them (spawn_agent without tags in 4 of 7 pilot-9 traces; plan steps without
+# acceptance checks), so the teacher's copy of the schemas marks them required. The stored sample
+# and the student keep the real schemas.
+TEACHER_REQUIRED = {"spawn_agent": ("tier", "tags")}
+TEACHER_REQUIRED_STEP = ("owner", "acceptance")
+
+
+def teacher_tools(names: list[str]) -> list[dict]:
+    tools = copy.deepcopy(openai_tools(names))
+    for tool in tools:
+        function = tool["function"]
+        parameters = function["parameters"]
+        extra = TEACHER_REQUIRED.get(function["name"], ())
+        parameters["required"] = [*parameters.get("required", []), *extra]
+        if function["name"] == "update_plan":
+            step = parameters["properties"]["steps"]["items"]
+            step["required"] = [*step.get("required", []), *TEACHER_REQUIRED_STEP]
+    return tools
+
+
 def sample_tokens(messages: list[dict], tools: list[dict]) -> int:
     """About how many tokens the student sees for this sample: messages, reasoning and tool
     definitions at four characters a token (within 10% of the Qwen3.5 tokenizer in the pilot)."""
@@ -274,7 +312,7 @@ def check_teacher_reasoning(teacher: Chat, config: "GenerationConfig") -> None:
         {"role": "system", "content": teacher_system(65536)},
         {"role": "user", "content": _PREFLIGHT_USER},
     ]
-    tools = openai_tools(["update_plan"])
+    tools = teacher_tools(["update_plan"])
     modes = [("tool_choice=required", {"tool_choice": "required"}), ("no forced tool", {})]
     if not config.force_first_tool:
         modes = modes[1:]
@@ -334,7 +372,7 @@ def generate_trace(
         extra = {"tool_choice": "required"} if force else {}
         reply = teacher.chat(
             teacher_messages,
-            tools=tools,
+            tools=teacher_tools(record.tools),
             temperature=config.temperature,
             seed=(base_seed + turn) & SEED_MASK,
             max_tokens=config.max_tokens,
