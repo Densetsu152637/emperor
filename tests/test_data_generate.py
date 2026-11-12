@@ -286,3 +286,14 @@ def test_the_teacher_prompt_differs_between_tasks_only_at_its_end():
     assert large.rstrip().endswith("context budget: 128K tokens")
     shared = len(small.rstrip().rsplit("\n", 1)[0])
     assert small[:shared] == large[:shared] and shared > 0.95 * len(small)
+
+
+def test_a_trace_longer_than_the_training_length_is_rejected_early():
+    teacher = ScriptedTeacher(good_script())
+    sample, reason = generate_trace(
+        record(), teacher, FakeEnv(), GenerationConfig(max_sample_tokens=1500)
+    )
+    assert (sample, reason) == (None, "too_long")
+    assert len(teacher.seen) == 1  # stopped after the first turn's tool result
+    sample, reason = generate_trace(record(), ScriptedTeacher(good_script()), FakeEnv())
+    assert reason is None

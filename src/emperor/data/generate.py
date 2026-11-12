@@ -22,7 +22,13 @@ from emperor.data.teacher import (
     TeacherOutputError,
     TeacherSetupError,
 )
-from emperor.eval.contract import check_call, openai_tools, prompt, system_prompt
+from emperor.eval.contract import (
+    check_call,
+    estimate_tokens,
+    openai_tools,
+    prompt,
+    system_prompt,
+)
 
 
 class Chat(Protocol):
@@ -53,6 +59,9 @@ class GenerationConfig:
     # tool result gpt-oss often acts without thinking again (pilot: about a third of later turns),
     # and the student learns those turns with an empty think block.
     require_reasoning: bool = True
+    # The student's training length (configs/sft.toml max_length): longer traces are skipped
+    # in training, so generation stops and rejects them (`too_long`) as soon as they pass it.
+    max_sample_tokens: int | None = 8192
 
 
 # Classes where answering without any tool is the right behaviour.
@@ -200,6 +209,14 @@ def _normalise_calls(raw_calls: list[dict], counter: list[int]) -> list[dict]:
 TEACHER_REASONING_FIELD = "reasoning_content"
 
 
+def sample_tokens(messages: list[dict], tools: list[dict]) -> int:
+    """About how many tokens the student sees for this sample: messages, reasoning and tool
+    definitions at four characters a token (within 10% of the Qwen3.5 tokenizer in the pilot)."""
+    return estimate_tokens(json.dumps(messages, ensure_ascii=False)) + estimate_tokens(
+        json.dumps(tools, ensure_ascii=False)
+    )
+
+
 def reasoning_of(reply: dict) -> str:
     reasoning = reply.get("reasoning_content")
     return reasoning.strip() if isinstance(reasoning, str) else ""
@@ -315,8 +332,12 @@ def generate_trace(
             tool_message = {"role": "tool", "tool_call_id": call["id"], "content": result}
             teacher_messages.append(tool_message)
             stored.append(tool_message)
+        if config.max_sample_tokens and sample_tokens(stored, tools) > config.max_sample_tokens:
+            return None, "too_long"  # training would drop it; stop paying the teacher for it
     else:
         return None, "turn_limit"
+    if config.max_sample_tokens and sample_tokens(stored, tools) > config.max_sample_tokens:
+        return None, "too_long"
 
     if requires_tools and not any(m.get("tool_calls") for m in stored[2:]):
         return None, "no_tool_use"
