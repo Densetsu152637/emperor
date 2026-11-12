@@ -69,7 +69,9 @@ SERVER_LOAD_SECONDS = 3600.0
 # The 120B teacher does not fit in RAM beside Windows: its CPU experts (51 GB) are paged in from
 # disk on demand. No host-RAM prompt cache next to it, and no weight repacking, so every CPU
 # weight stays file-backed and the OS can drop and re-read pages instead of swapping copies.
-TEACHER_SERVER_ARGS = ["--cache-ram", "0", "--no-repack"]
+# No op offload: by default every prompt-processing batch streams all CPU experts to the GPU,
+# which on this machine means paging all 51 GB in from disk for each 512-token batch.
+TEACHER_SERVER_ARGS = ["--cache-ram", "0", "--no-repack", "--no-op-offload"]
 
 
 @dataclass
