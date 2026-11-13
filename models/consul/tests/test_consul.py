@@ -245,9 +245,9 @@ def test_eval_dry_run_scores_perfectly_and_refuses_overlap(tmp_path, capsys):
 
 def test_consul_config_is_emperors_recipe_with_consul_names():
     config = load_config(ROOT / "configs" / "sft.toml")
-    assert config.merge.output_dir == "weights/consul-4b-bf16"
-    assert config.release.name == "consul-4b" and config.release.eval_alias == "consul"
-    assert config.model.base.endswith("Qwen3.5-4B")
+    assert config.merge.output_dir == "weights/consul-9b-bf16"
+    assert config.release.name == "consul-9b" and config.release.eval_alias == "consul"
+    assert config.model.base.endswith("Qwen3.5-9B")
     assert config.data.max_length == 8192
     assert {"in_proj_qkv", "in_proj_z", "out_proj"} <= set(config.lora.target_modules)
 
