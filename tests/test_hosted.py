@@ -95,7 +95,8 @@ def test_deepseek_teacher_thinks_and_never_gets_a_required_tool_choice():
     teacher.chat([{"role": "user", "content": "x"}], tools=[{"type": "function"}],
                  tool_choice="required", temperature=0.7, seed=3, max_tokens=4096)  # fmt: skip
     body = http.posts[0]["json"]
-    assert body["thinking"] == {"type": "enabled"} and body["reasoning_effort"] == "high"
+    assert body["thinking"] == {"type": "enabled"}
+    assert body["reasoning_effort"] == CONFIG.roles["teacher"].reasoning_effort
     assert "tool_choice" not in body  # a 400 in thinking mode
     assert "temperature" not in body and "seed" not in body
     assert body["max_tokens"] == 16384  # the role's budget covers reasoning

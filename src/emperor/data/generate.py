@@ -139,8 +139,9 @@ Rules:
   snippet, one per line. Content must be realistic and consistent with what is known.
 - web_fetch: return the readable text of the page, 120 to 280 words, with concrete facts.
 - A subagent report (await_tasks): write the report the subagent would send for its brief,
-  following the brief's "Output format", 60 to 180 words, with concrete evidence for each
-  acceptance check. Occasionally (about one time in six) report a genuine problem or a failed
+  following the brief's "Output format", 60 to 180 words (40 to 90 words each when more than
+  four reports are asked for at once, as for chunks of one long input), with concrete
+  evidence for each acceptance check. Occasionally (about one time in six) report a genuine problem or a failed
   check, so the assistant has to re-plan.
 - ask_user: write the user's answers, one line per question, as a normal person would; accept
   the recommended answer about half the time.

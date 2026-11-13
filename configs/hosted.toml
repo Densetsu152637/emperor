@@ -69,7 +69,7 @@ cache_write = 2.00  # the default 5-minute cache tier
 provider = "deepseek"
 model = "deepseek-v4-pro"
 thinking = true
-reasoning_effort = "high"  # DeepSeek maps medium to high; its reasoning is what the student learns
+reasoning_effort = "low"  # pilot 2: shorter reasoning; high gave 1-2K-token first turns
 max_tokens = 16384  # reasoning plus the reply
 
 [roles.simulator]
