@@ -12,7 +12,7 @@ Nothing is published to Hugging Face.
 
 Run it from anywhere with Python 3.12+ (standard library only):
 
-    python scripts/full_run.py start [--deepseek-budget 150 --kimi-budget 60]
+    python scripts/full_run.py start [--deepseek-budget 75 --kimi-budget 30]
     python scripts/full_run.py status
     python scripts/full_run.py stop      # the running stage stops cleanly; `start` resumes
 
@@ -271,8 +271,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--consul", default=str(EMPEROR.parent / "consul"))
     p.add_argument("--pilot-data-root", default=str(EMPEROR.parent),
                    help="where the <repo>-hosted worktrees with the pilot data are")  # fmt: skip
-    p.add_argument("--deepseek-budget", type=float, default=150.0)
-    p.add_argument("--kimi-budget", type=float, default=60.0)
+    p.add_argument("--deepseek-budget", type=float, default=75.0)
+    p.add_argument("--kimi-budget", type=float, default=30.0)
     p.add_argument("--skip-sync", action="store_true", help="do not uv sync before training")
     return p
 

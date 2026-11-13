@@ -118,7 +118,7 @@ idle. Training takes its length from the data (p99, at most 32K) with activation
 RAM. Nothing is published.
 
 ```powershell
-python scripts/full_run.py start --deepseek-budget 150 --kimi-budget 60
+python scripts/full_run.py start --deepseek-budget 75 --kimi-budget 30
 python scripts/full_run.py status     # runs/full/status.json
 python scripts/full_run.py stop       # then `start` again to resume
 ```
