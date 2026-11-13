@@ -5,6 +5,7 @@ a hosted API. The teacher is Apache-2.0 licensed; every sample records that.
 """
 
 import json
+import re
 import time
 from pathlib import Path, PurePath
 from urllib.parse import urlparse
@@ -19,6 +20,18 @@ _LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
 class TeacherOutputError(RuntimeError):
     """The server is up but rejected what the model produced (llama.cpp answers 500 when the
     output does not parse as the chat format): one bad sample, not a dead server."""
+
+
+class TeacherContextError(TeacherOutputError):
+    """The request did not fit the server's context (prompt plus reply, or a full KV cache).
+    Retrying the same request cannot help, so it is not retried, and it is reported as its own
+    reject reason instead of passing for an unparsable output."""
+
+
+# What llama-server says when a request outgrows the context or the KV cache.
+_CONTEXT_ERROR = re.compile(
+    r"exceed_context|context size|context length|kv size|kv cache|n_ctx", re.IGNORECASE
+)
 
 
 class TeacherSetupError(RuntimeError):
@@ -149,6 +162,14 @@ class ChatClient:
                     self.tool_choice_supported = False
                     del body["tool_choice"]
                     continue
+                if (
+                    status is not None
+                    and status >= 400
+                    and _CONTEXT_ERROR.search(_error_text(response))
+                ):
+                    raise TeacherContextError(
+                        f"request exceeds the server's context: {_error_text(response)[:300]}"
+                    ) from error
                 if status is not None and status >= 500:
                     server_rejected += 1
             time.sleep(min(2**attempt, 10))

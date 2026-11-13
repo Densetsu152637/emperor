@@ -20,6 +20,7 @@ from emperor.data.shards import ShardWriter, done_ids, read_jsonl
 from emperor.data.style import STYLE
 from emperor.data.teacher import (
     TEACHER_MODEL,
+    TeacherContextError,
     TeacherError,
     TeacherOutputError,
     TeacherSetupError,
@@ -514,6 +515,8 @@ def _sample_with_retries(
     for attempt in range(config.retries + 1):
         try:
             sample, reason = generate_trace(record, teacher, env_client, config, attempt=attempt)
+        except TeacherContextError:  # the trace outgrew the server's context or KV cache
+            sample, reason = None, "context_exceeded"
         except TeacherOutputError:
             sample, reason = None, "teacher_output_unparsable"
         except TeacherError:

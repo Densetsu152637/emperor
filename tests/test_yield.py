@@ -357,3 +357,44 @@ def test_recorded_model_names_come_from_the_served_gguf():
     assert model_name("D:/AI-Models/x/Qwen3.8-27B-UD-Q4_K_XL.gguf") == "Qwen3.8-27B-UD-Q4_K_XL"
     assert model_name(r"F:\m\gpt-oss-120b-F16.gguf") == "gpt-oss-120b-F16"
     assert model_name("Qwen3.8-27B") == "Qwen3.8-27B"  # an alias keeps its dots
+
+
+def test_a_context_overflow_is_its_own_reject_reason(monkeypatch, tmp_path):
+    from emperor.data.teacher import TeacherContextError
+
+    monkeypatch.setattr("emperor.data.teacher.time.sleep", lambda _: None)
+    client = ChatClient.__new__(ChatClient)
+    client.base_url, client.model, client.retries = "http://127.0.0.1:1/v1", "m", 3
+    client.reasoning_effort, client.tool_choice_supported = None, True
+    client.slot, client.template_kwargs = None, {}
+
+    class Full:
+        def __init__(self):
+            self.posts = 0
+
+        def post(self, url, json):
+            self.posts += 1
+            return _Response(500, "Context size has been exceeded.")
+
+    client._http = Full()
+    with pytest.raises(TeacherContextError):
+        client.chat(USER)
+    assert client._http.posts == 1  # not retried: the same request cannot fit next time
+
+    class Overflowing(ScriptedTeacher):
+        def chat(self, messages, *, tools=None, **kwargs):
+            if messages[-1].get("role") == "tool":
+                raise TeacherContextError("request exceeds the server's context")
+            return super().chat(messages, tools=tools, **kwargs)
+
+    prompts = tmp_path / "prompts.jsonl"
+    prompts.write_text(json.dumps(record().to_dict()) + "\n", encoding="utf-8")
+    counts = run_generation(
+        prompts,
+        tmp_path,
+        Overflowing(good_script() * 3),
+        FakeEnv(),
+        config=GenerationConfig(retries=0),
+    )
+    (reject,) = iter_records(tmp_path / "rejects")
+    assert counts["rejected"] == 1 and reject["reason"] == "context_exceeded"
