@@ -188,6 +188,16 @@ def test_unparseable_judgement_is_retried_colder_with_a_stricter_instruction():
     assert second_kw["max_tokens"] >= first_kw["max_tokens"]
 
 
+def test_judge_temperature_follows_thinking():
+    thinking = RecordingJudge([json.dumps(GOOD)])
+    judge_sample(make_sample(), thinking)  # a client without template kwargs thinks
+    assert thinking.calls[0][1]["temperature"] == 0.6
+    plain = RecordingJudge([json.dumps(GOOD)])
+    plain.template_kwargs = {"enable_thinking": False}
+    judge_sample(make_sample(), plain)
+    assert plain.calls[0][1]["temperature"] == 0.2
+
+
 def test_quick_answer_and_clarify_are_not_penalised_for_not_delegating():
     scores = {
         **dict.fromkeys(CRITERIA, 5),

@@ -161,9 +161,19 @@ _STRICT_JSON = (
     "nothing else: no prose before or after, no code fence, no thinking out loud. Use the keys "
     '"scores" (all eight criteria, integers 1-5), "pass" (true or false) and "reason".'
 )
-# The judge thinks before it answers, so the token budget covers its reasoning as well. The retry
-# is colder, stricter about the format and has more room to finish.
-_JUDGE_TRIES = ((0.6, 8192, ""), (0.3, 12288, _STRICT_JSON))
+# (temperature, max_tokens, suffix) per try. With thinking on, Qwen's recommended 0.6: greedy
+# decoding can loop inside a long think block. With thinking off the verdict is the whole answer,
+# so it is sampled near-greedy for repeatable scores. The token budget covers any thinking; the
+# retry is colder, stricter about the format and has more room to finish.
+_JUDGE_TRIES = {
+    True: ((0.6, 8192, ""), (0.3, 12288, _STRICT_JSON)),
+    False: ((0.2, 8192, ""), (0.1, 12288, _STRICT_JSON)),
+}
+
+
+def client_thinks(client: Chat) -> bool:
+    """Whether the judge client asks for thinking (`enable_thinking` in its template kwargs)."""
+    return bool(getattr(client, "template_kwargs", {}).get("enable_thinking", True))
 
 
 def judge_answer(reply: dict) -> str:
@@ -177,15 +187,23 @@ def judge_answer(reply: dict) -> str:
     return content
 
 
-def judge_sample(sample: dict, client: Chat, *, seed: int = 0, attempts: int = 2) -> JudgeResult:
+def judge_sample(
+    sample: dict,
+    client: Chat,
+    *,
+    seed: int = 0,
+    attempts: int = 2,
+    thinking: bool | None = None,
+) -> JudgeResult:
     """Score one trace; an unparseable answer is retried with a lower temperature and a
-    stricter JSON instruction before giving up."""
+    stricter JSON instruction before giving up. `thinking` defaults to the client's setting."""
     task_class = sample.get("task_class")
     system = judge_system(task_class)
     transcript = "Transcript to score:\n\n" + render_transcript(sample)
+    tries = _JUDGE_TRIES[client_thinks(client) if thinking is None else thinking]
     last: Exception | None = None
     for attempt in range(attempts):
-        temperature, max_tokens, suffix = _JUDGE_TRIES[min(attempt, len(_JUDGE_TRIES) - 1)]
+        temperature, max_tokens, suffix = tries[min(attempt, len(tries) - 1)]
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": transcript + suffix},
