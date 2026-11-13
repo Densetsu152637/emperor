@@ -1,0 +1,74 @@
+# Hosted teacher, tool simulator and judge for `uv run --group data --group hosted hosted ...`.
+#
+# API keys are never stored here: they are read at run time from the OS credential store with
+# `keyring` (Windows Credential Manager), service `key_service`, username `key_user`.
+#
+# Rates are USD per million tokens at the standard (peak) price, checked on 2026-11-13 against
+# the pages in `rates_source`. Update them when the provider changes its prices; the spend
+# estimate in the status file and the budget caps use them.
+
+[providers.deepseek]
+base_url = "https://api.deepseek.com"
+key_service = "emperor"
+key_user = "deepseek"
+budget_usd = 25.0  # hard cap: the run stops (resumable) when the estimate reaches it
+max_concurrency = 16  # account limits: 500 concurrent for deepseek-v4-pro, 2500 for flash
+rates_source = "https://api-docs.deepseek.com/quick_start/pricing"
+# "Off-peak rates are half of the peak rates. Peak hours are 01:00 - 04:00 and 06:00 - 10:00
+# UTC, Monday through Friday, excluding Chinese public holidays." (holidays are not modelled,
+# so the estimate errs high on them).
+peak_hours_utc = [[1, 4], [6, 10]]
+peak_weekdays_only = true
+offpeak_factor = 0.5
+offpeak_only = false  # true: wait for off-peak hours before every DeepSeek request
+thinking_param = true
+# "required and named tool choices are not supported in thinking mode; the API returns a 400
+# error." (https://api-docs.deepseek.com/api/create-chat-completion)
+required_tool_choice_when_thinking = false
+
+[providers.deepseek.rates.deepseek-v4-pro]  # DeepSeek-V4-Pro-0813
+input_miss = 1.32
+input_hit = 0.044
+output = 3.96
+
+[providers.deepseek.rates.deepseek-flash]  # DeepSeek-V4.1-Flash-1017, the cheapest current Flash
+input_miss = 0.30
+input_hit = 0.006
+output = 1.20
+
+[providers.moonshot]
+base_url = "https://api.moonshot.ai/v1"
+key_service = "emperor"
+key_user = "moonshot"
+budget_usd = 25.0
+# Tier by cumulative top-up (https://platform.kimi.ai/docs/pricing/limits): $20+ is Tier2,
+# 40 concurrent requests, 100 RPM, 3M TPM.
+max_concurrency = 8
+rates_source = "https://platform.kimi.ai/docs/pricing/chat"
+# K3 series: temperature, top_p, n and the penalties are fixed; passing them is an error
+# (https://platform.kimi.ai/docs/api/models-overview).
+fixed_sampling = true
+
+[providers.moonshot.rates."kimi-k3.1-pro"]
+input_miss = 2.00
+input_hit = 0.20
+output = 10.00
+cache_write = 2.00  # the default 5-minute cache tier
+
+[roles.teacher]
+provider = "deepseek"
+model = "deepseek-v4-pro"
+thinking = true
+reasoning_effort = "high"  # DeepSeek maps medium to high; its reasoning is what the student learns
+max_tokens = 16384  # reasoning plus the reply
+
+[roles.simulator]
+provider = "deepseek"
+model = "deepseek-flash"
+thinking = false  # its output is tool-result context, never trained on
+
+[roles.judge]
+provider = "moonshot"
+model = "kimi-k3.1-pro"  # always thinks; effort is the only switch
+reasoning_effort = "high"
+max_tokens = 16384
