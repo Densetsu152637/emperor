@@ -166,6 +166,29 @@ def test_run_gated_stops_after_repeated_failures():
     assert result["status"] == "failed" and "server crashed" in result["error"]
 
 
+def test_run_gated_forgives_failures_after_progress():
+    g = gate(idle=3600, gpu=0.0)
+    runs = {"n": 0}
+
+    def work(resource, should_stop):
+        # Every run gets work done and then loses its server; the sixth finishes.
+        runs["n"] += 1
+        if runs["n"] < 6:
+            return {"stopped": True, "error": "server died", "accepted": 3}
+        return {"stopped": False, "accepted": 1}
+
+    result = run_gated(
+        gate=g,
+        quit_flag=lambda: False,
+        start=lambda: object(),
+        stop=lambda r: None,
+        work=work,
+        sleep=lambda s: None,
+        max_failures=2,
+    )
+    assert result["status"] == "done" and runs["n"] == 6
+
+
 def test_run_gated_quits_without_starting_when_asked():
     g = gate(idle=0, gpu=0.0)
     started = []

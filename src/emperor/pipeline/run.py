@@ -172,6 +172,14 @@ def _monitor(watcher, resource, stop, finished: threading.Event, seconds: float)
             return
 
 
+PROGRESS_KEYS = ("accepted", "rejected", "judged")  # what generation and judging count
+
+
+def made_progress(result: dict) -> bool:
+    """Whether a stopped worker finished any item before it stopped."""
+    return any(int(result.get(key) or 0) > 0 for key in PROGRESS_KEYS)
+
+
 def run_gated(
     *,
     gate: IdleGate,
@@ -235,6 +243,10 @@ def run_gated(
             pauses += 1
             log.info("%s paused: %s", name, watcher.reason)
         else:
+            # A server that dies after hours of useful work is not a repeated failure: only
+            # consecutive starts that got nothing done count toward the limit.
+            if made_progress(result):
+                failures = 0
             failures += 1
             log.warning(
                 "%s failed (%s); attempt %d of %d",
