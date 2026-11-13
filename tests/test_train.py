@@ -337,5 +337,6 @@ def test_the_training_length_covers_the_p99_of_the_data_up_to_a_cap():
     assert pick_max_length(lengths, cap=8192) == 8192
     assert pick_max_length([40000] * 10) == 32768  # a runaway length is capped
     assert pick_max_length([]) == 1024
+    assert pick_max_length(lengths, quantile=1.0) == 11264  # the longest, 10,900
     config = parse_config({"data": {"max_length_auto": True}})
-    assert config.data.max_length_cap == 32768 and config.data.max_length_quantile == 0.99
+    assert config.data.max_length_cap == 32768 and config.data.max_length_quantile == 1.0

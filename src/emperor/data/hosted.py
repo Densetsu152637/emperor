@@ -119,6 +119,21 @@ class Provider:
             when = when.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
         raise ValueError(f"{self.name}: no off-peak hour in a week")
 
+    def closed(self, when: datetime) -> bool:
+        """No new request may start: it is peak, or a request sent now could still be running
+        (up to `timeout_seconds`) when peak begins."""
+        lead = timedelta(seconds=self.timeout_seconds)
+        return self.is_peak(when) or self.is_peak(when + lead)
+
+    def next_open(self, when: datetime) -> datetime:
+        """The first minute at or after `when` at which a new request may start."""
+        when = when.astimezone(UTC)
+        for _ in range(60 * 24 * 8):
+            if not self.closed(when):
+                return when
+            when = when.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        raise ValueError(f"{self.name}: no off-peak window in a week")
+
 
 @dataclass
 class Role:
@@ -358,6 +373,7 @@ class HostedClient:
         self._local = threading.local()  # the model that answered this thread's last request
         self._fallback_until = 0.0  # monotonic time until which the primary is skipped
         self._fallback_index = 0
+        self._fallback_lock = threading.Lock()
         self._monotonic = time.monotonic
         self.waiting_until: datetime | None = None  # set while held back for off-peak hours
         self._sleep = sleep
@@ -414,9 +430,9 @@ class HostedClient:
         try:
             while self.provider.offpeak_only:
                 now = self._clock()
-                if not self.provider.is_peak(now):
+                if not self.provider.closed(now):
                     break
-                self.waiting_until = self.provider.next_offpeak(now)
+                self.waiting_until = self.provider.next_open(now)
                 if self._should_stop():
                     raise TeacherError(f"{self.provider.name}: stopped while waiting for off-peak")
                 self._sleep(60)
@@ -453,6 +469,10 @@ class HostedClient:
                 response = self._http.post(url, json=body, headers=self._headers)
             except Exception as error:  # timeouts, dropped connections: retried
                 last = type(error).__name__
+                if "Timeout" in last:
+                    # The provider may still bill a request we stopped waiting for: charge an
+                    # estimate (the prompt plus the whole output budget) so the caps hold.
+                    self._charge_estimate(model, body, sent)
                 self._sleep(self._backoff(attempt, None))
                 continue
             status = response.status_code
@@ -475,7 +495,7 @@ class HostedClient:
                 overloaded += 1
                 last = f"HTTP 429 overloaded ({model})"
                 if overloaded >= self.role.overload_tries:
-                    self.fall_back()
+                    self.fall_back(model)
                     overloaded = 0
                     continue
                 self._sleep(self._backoff(attempt, _retry_after(response)))
@@ -513,7 +533,24 @@ class HostedClient:
             self._fallback_index = 0  # the cool-down is over: try the primary again
         return chain[self._fallback_index]
 
-    def fall_back(self) -> None:
+    def _charge_estimate(self, model: str, body: dict, sent: datetime) -> None:
+        prompt = len(json.dumps(body["messages"], ensure_ascii=False)) // 3
+        tokens = {"input_hit": 0, "input_write": 0, "input_miss": prompt,
+                  "output": int(body.get("max_tokens") or 0), "reasoning": 0}  # fmt: skip
+        usd = request_cost(self.provider, model, tokens, sent)
+        self.ledger.record(
+            self.provider.name, self.role.name, model, {**tokens, "estimated": 1}, usd
+        )
+
+    def fall_back(self, from_model: str | None = None) -> None:
+        """Move to the next model of the chain, unless another thread already moved away
+        from `from_model` (requests in flight fail together when a model is overloaded)."""
+        with self._fallback_lock:
+            if from_model is not None and self.current_model() != from_model:
+                return
+            self._move_on()
+
+    def _move_on(self) -> None:
         chain = [self.role.model, *self.role.fallback_models]
         self._fallback_index = (self._fallback_index + 1) % len(chain)
         self._fallback_until = self._monotonic() + self.role.fallback_cooldown_seconds

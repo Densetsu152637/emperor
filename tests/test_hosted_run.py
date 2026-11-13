@@ -267,3 +267,32 @@ def test_budgets_can_be_set_per_run():
     config = hosted.configure(args)
     assert config.providers["deepseek"].budget_usd == 120.0
     assert config.providers["kimi"].budget_usd == 40.0
+
+
+def test_one_run_per_data_dir_and_a_dead_holder_is_taken_over(tmp_path):
+    import os
+
+    import pytest
+
+    lock = tmp_path / ".hosted.lock"
+    lock.write_text(str(os.getpid() + 999999), encoding="utf-8")  # no such process
+    assert hosted.take_lock(lock) == lock and lock.read_text() == str(os.getpid())
+    lock.write_text("4", encoding="utf-8")  # pid 4 (System on Windows) is alive
+    if hosted.pid_alive(4):
+        with pytest.raises(SystemExit):
+            hosted.take_lock(lock)
+
+
+def test_a_torn_state_file_is_rebuilt_and_stale_rejects_do_not_count(tmp_path, monkeypatch):
+    from emperor.data.shards import ShardWriter
+
+    data = tmp_path / "counts"
+    ShardWriter(data / "traces", "traces").write({"id": "p-1", "meta": {}, "messages": []})
+    ShardWriter(data / "rejects", "rejects").write({"id": "p-1", "reason": "too_long"})
+    ShardWriter(data / "rejects", "rejects").write({"id": "p-2", "reason": "too_long"})
+    counts = hosted.count_dir(data)
+    assert counts["generated"] == 1 and counts["generation_rejects"] == {"too_long": 1}
+    (tmp_path / "runs" / "r1").mkdir(parents=True)
+    (tmp_path / "runs" / "r1" / "state.json").write_text('{"phases": {', encoding="utf-8")
+    code, status, _ = run(tmp_path, monkeypatch)
+    assert code == 0 and status["state"] == "done"

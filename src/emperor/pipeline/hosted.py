@@ -58,8 +58,14 @@ def count_dir(directory: Path) -> dict:
     if prompts_file.exists():
         prompts = sum(1 for line in prompts_file.read_text(encoding="utf-8").splitlines() if line)
     # The latest record per id, without excluded pilots: what a resume and the filter count.
-    rejects = Counter(r.get("reason", "unknown") for r in current(directory / "rejects").values())
-    traces = len(current(directory / "traces"))
+    traced = current(directory / "traces")
+    # A reject for an id that has a trace (a too_long task done again) no longer counts.
+    rejects = Counter(
+        r.get("reason", "unknown")
+        for i, r in current(directory / "rejects").items()
+        if i not in traced
+    )
+    traces = len(traced)
     judged = kept = 0
     judge_rejects: Counter = Counter()
     for sample in current(directory / "judged").values():
@@ -83,6 +89,55 @@ def ping(client: HostedClient) -> str:
     """One tiny request: proves the key and model work, and returns the served model id."""
     client.chat([{"role": "user", "content": "Reply with the word OK."}], max_tokens=256)
     return client.served_model or client.model
+
+
+def write_atomic(path: Path, text: str) -> None:
+    """Write via a temporary file and replace, so a crash never leaves a torn file."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
+
+def pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # query limited info
+        if not handle:
+            return False
+        code = ctypes.c_ulong()
+        ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def take_lock(path: Path) -> Path:
+    """An exclusive lock file holding this process's id; a lock left by a dead process is
+    taken over. Two runs on one data directory would write the same shards."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for _ in range(2):
+        try:
+            handle = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                holder = int(path.read_text(encoding="utf-8").strip() or 0)
+            except (OSError, ValueError):
+                holder = 0
+            if pid_alive(holder) and holder != os.getpid():
+                raise SystemExit(f"{path}: another run (pid {holder}) is using this data") from None
+            path.unlink(missing_ok=True)
+            continue
+        with os.fdopen(handle, "w", encoding="utf-8") as out:
+            out.write(str(os.getpid()))
+        return path
+    raise SystemExit(f"{path}: could not take the lock")
 
 
 class HostedRun:
@@ -403,7 +458,12 @@ class HostedRun:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         state_path = self.run_dir / "state.json"
         if state_path.exists():
-            self.state = json.loads(state_path.read_text(encoding="utf-8"))
+            try:
+                self.state = json.loads(state_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:  # torn by a crash: the phases rebuild it from the data
+                log.warning("state.json unreadable; rebuilding it from the data")
+                self.state = {"phases": {}}
+        lock = take_lock(self.data_dir / ".hosted.lock")
         stop = threading.Event()
         threading.Thread(target=self._status_loop, args=(stop,), daemon=True).start()
         outcome = "done"
@@ -426,7 +486,7 @@ class HostedRun:
                 stopped = result.get("stopped")
                 status = "stopped" if stopped else "done"
                 self.state["phases"][name] = {"status": status, **result}
-                state_path.write_text(json.dumps(self.state, indent=2), encoding="utf-8")
+                write_atomic(state_path, json.dumps(self.state, indent=2))
                 log.info("phase %s: %s", name, result)
                 if stopped:
                     error = str(result.get("error", ""))
@@ -441,9 +501,10 @@ class HostedRun:
             stop.set()
             self.phase = "finished"
             self.write_status(outcome)
-            state_path.write_text(json.dumps(self.state, indent=2), encoding="utf-8")
+            write_atomic(state_path, json.dumps(self.state, indent=2))
             for client in self.clients.values():
                 client.close()
+            lock.unlink(missing_ok=True)
         return outcome
 
 

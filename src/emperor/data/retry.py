@@ -66,8 +66,11 @@ def prepare_round(data_dir: Path, k: int) -> int:
         won |= kept_ids(round_dir(data_dir, j))
     # A prompt whose trace was too long is long by nature (pilots: 30 of 33 extra tries were too
     # long again); another round would pay for the same rejection.
+    traced = set(current(previous / "traces"))
     too_long = {
-        i for i, r in current(previous / "rejects").items() if r.get("reason") in NO_RETRY_REASONS
+        i
+        for i, r in current(previous / "rejects").items()
+        if r.get("reason") in NO_RETRY_REASONS and i not in traced  # not a stale reject
     }
     lines = []
     for record in read_jsonl(previous / "prompts.jsonl"):

@@ -377,3 +377,44 @@ def test_an_overloaded_judge_falls_back_for_a_cool_down_then_tries_the_primary(t
     assert [r["model"] for r in rows] == [
         "kimi-k3.1-pro-highspeed", "kimi-k3.1-pro-highspeed", "kimi-k3.1-pro"
     ]  # fmt: skip
+
+
+def test_no_request_starts_that_could_still_run_when_peak_begins():
+    deepseek = dataclasses.replace(CONFIG.providers["deepseek"], timeout_seconds=900)
+    friday = datetime(2026, 11, 13, tzinfo=UTC)
+    assert not deepseek.closed(friday.replace(hour=0, minute=40))
+    assert deepseek.closed(friday.replace(hour=0, minute=50))  # 15 minutes before 01:00
+    assert deepseek.next_open(friday.replace(hour=0, minute=50)) == friday.replace(hour=4)
+    # 04:00-06:00 is off-peak, but closes at 05:45 for the 06:00 peak.
+    assert deepseek.closed(friday.replace(hour=5, minute=46))
+    assert deepseek.next_open(friday.replace(hour=5, minute=46)) == friday.replace(hour=10)
+
+
+def test_a_timeout_is_charged_an_estimate_so_the_budget_holds(tmp_path):
+    class Timeout(Exception):
+        pass
+
+    Timeout.__name__ = "ReadTimeout"
+
+    class Hanging(Http):
+        def post(self, url, json, headers):
+            self.posts.append(json)
+            if len(self.posts) == 1:
+                raise Timeout("read timed out")
+            return ok()
+
+    ledger = Ledger(tmp_path / "spend.jsonl")
+    r, p = CONFIG.role("teacher")
+    made = HostedClient(r, p, ledger, key=KEY, http=Hanging([]), sleep=lambda s: None,
+                        clock=lambda: OFFPEAK)  # fmt: skip
+    made.chat([{"role": "user", "content": "x" * 3000}])
+    rows = [json.loads(line) for line in (tmp_path / "spend.jsonl").read_text().splitlines()]
+    assert rows[0]["tokens"]["estimated"] == 1 and rows[0]["tokens"]["output"] == 16384
+    assert rows[0]["usd"] > 0 and len(rows) == 2
+
+
+def test_parallel_overloads_move_down_the_chain_once():
+    judge, _ = client("judge", [])
+    judge.fall_back("kimi-k3.1-pro")
+    judge.fall_back("kimi-k3.1-pro")  # a second thread saw the same overload: no second move
+    assert judge.current_model() == "kimi-k3.1-pro-highspeed"
