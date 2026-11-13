@@ -9,8 +9,9 @@ from pathlib import Path
 
 from emperor.data.generate import Chat
 from emperor.data.parallel import run_items
+from emperor.data.records import current, fingerprint
 from emperor.data.schema import MAX_TABLE_ROWS, count_emojis, table_rows
-from emperor.data.shards import ShardWriter, done_ids, iter_records
+from emperor.data.shards import ShardWriter
 from emperor.data.style import CRITERIA, NOT_APPLICABLE, judge_system
 from emperor.data.teacher import (
     JUDGE_MODEL,
@@ -237,13 +238,22 @@ def run_judging(
     should_stop: Callable[[], bool] = lambda: False,
     log: Callable[[str], None] = lambda _: None,
     workers: int = 1,
+    settings: dict | None = None,
 ) -> dict:
     """Judge every trace not yet judged. Resumable; failures to parse are recorded as rejects.
-    `workers` traces are judged at once (hosted judges; a local server takes one at a time)."""
+    `workers` traces are judged at once (hosted judges; a local server takes one at a time).
+
+    With `settings` (judge model, effort, threshold, rubric), a trace judged under other
+    settings is judged again (costing judge tokens only) and the new verdict counts."""
     writer = ShardWriter(data_dir / "judged", "judged")
-    finished = done_ids(data_dir / "judged")
+    stamp = fingerprint(settings) if settings else None
+    finished = {
+        i
+        for i, r in current(data_dir / "judged").items()
+        if stamp is None or r.get("meta", {}).get("judge", {}).get("settings") == stamp
+    }
     counts = {"judged": 0, "kept": 0, "stopped": False}
-    todo = [s for s in iter_records(data_dir / "traces") if s["id"] not in finished]
+    todo = [s for i, s in current(data_dir / "traces").items() if i not in finished]
     if limit is not None:
         todo = todo[:limit]
 
@@ -251,7 +261,10 @@ def run_judging(
         try:
             result = judge_sample(sample, client, seed=sample["meta"]["seed"])
             keep, reasons = decide(result, threshold)
-            return {**result.to_dict(), "model": model, "keep": keep, "rejection": reasons}, keep
+            verdict = {**result.to_dict(), "model": model, "keep": keep, "rejection": reasons}
+            if stamp:
+                verdict["settings"] = stamp
+            return verdict, keep
         except TeacherContextError as error:
             return {
                 "keep": False,

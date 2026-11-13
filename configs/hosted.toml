@@ -1,7 +1,8 @@
 # Hosted teacher, tool simulator and judge for `uv run --group data --group hosted hosted ...`.
 #
-# API keys are never stored here: they are read at run time from the OS credential store with
-# `keyring` (Windows Credential Manager), service `key_service`, username `key_user`.
+# API keys are never stored here. At run time each provider's key is read from the environment
+# variable `key_env` if it is set, otherwise from the OS credential store with `keyring`
+# (Windows Credential Manager), service `key_service`, username `key_user`.
 #
 # Rates are USD per million tokens at the standard (peak) price, checked on 2026-11-13 against
 # the pages in `rates_source`. Update them when the provider changes its prices; the spend
@@ -9,6 +10,7 @@
 
 [providers.deepseek]
 base_url = "https://api.deepseek.com"
+key_env = "Deepseek_API_Key"
 key_service = "emperor"
 key_user = "deepseek"
 budget_usd = 25.0  # hard cap: the run stops (resumable) when the estimate reaches it
@@ -36,8 +38,12 @@ input_miss = 0.30
 input_hit = 0.006
 output = 1.20
 
-[providers.moonshot]
+[providers.kimi]
+# Keys from the Kimi Open Platform (platform.kimi.ai) use this endpoint for the OpenAI-compatible
+# Chat Completions API (https://platform.kimi.ai/docs/api/overview); accounts and keys there
+# are isolated from other regional Kimi platforms (https://platform.kimi.ai/docs/guide/troubleshooting).
 base_url = "https://api.moonshot.ai/v1"
+key_env = "Kimi_API_Key"
 key_service = "emperor"
 key_user = "moonshot"
 budget_usd = 25.0
@@ -49,7 +55,7 @@ rates_source = "https://platform.kimi.ai/docs/pricing/chat"
 # (https://platform.kimi.ai/docs/api/models-overview).
 fixed_sampling = true
 
-[providers.moonshot.rates."kimi-k3.1-pro"]
+[providers.kimi.rates."kimi-k3.1-pro"]
 input_miss = 2.00
 input_hit = 0.20
 output = 10.00
@@ -68,7 +74,7 @@ model = "deepseek-flash"
 thinking = false  # its output is tool-result context, never trained on
 
 [roles.judge]
-provider = "moonshot"
+provider = "kimi"
 model = "kimi-k3.1-pro"  # always thinks; effort is the only switch
 reasoning_effort = "high"
 max_tokens = 16384

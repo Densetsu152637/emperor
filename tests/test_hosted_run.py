@@ -35,7 +35,7 @@ class Fake:
         self.requests += 1
         if self.budget_after is not None and self.requests > self.budget_after:
             raise BudgetExceeded("deepseek: spend $25.00 reached the $25.00 cap")
-        provider = "moonshot" if self.role == "judge" else "deepseek"
+        provider = "kimi" if self.role == "judge" else "deepseek"
         tokens = usage_tokens({"prompt_tokens": 100, "completion_tokens": 10})
         self.ledger.record(provider, self.role, self.model, tokens, 0.001)
         if self.role == "judge":

@@ -150,7 +150,7 @@ def test_deepseek_costs_half_off_peak_and_kimi_costs_the_same_at_any_hour():
     assert peak == pytest.approx(0.044 + 1.32 + 3.96)
     assert request_cost(deepseek, "deepseek-v4-pro", tokens, OFFPEAK) == pytest.approx(peak / 2)
     assert request_cost(deepseek, "deepseek-v4-pro", tokens, WEEKEND) == pytest.approx(peak / 2)
-    kimi = CONFIG.providers["moonshot"]
+    kimi = CONFIG.providers["kimi"]
     assert request_cost(kimi, "kimi-k3.1-pro", tokens, PEAK) == pytest.approx(0.2 + 2 + 10)
 
 
@@ -225,6 +225,7 @@ def test_a_missing_key_is_a_setup_error(monkeypatch):
     import keyring
 
     monkeypatch.setattr(keyring, "get_password", lambda service, user: None)
+    monkeypatch.delenv("Deepseek_API_Key", raising=False)
     role, provider = CONFIG.role("teacher")
     with pytest.raises(TeacherSetupError) as error:
         HostedClient(role, provider, Ledger(None), http=Http([]))
@@ -243,3 +244,22 @@ def test_ledger_rows_are_json(tmp_path):
     ledger.record("deepseek", "teacher", "deepseek-v4-pro", usage_tokens({}), 0.0)
     row = json.loads((tmp_path / "spend.jsonl").read_text(encoding="utf-8"))
     assert row["provider"] == "deepseek" and row["role"] == "teacher"
+
+
+def test_the_key_comes_from_the_environment_first_then_keyring(monkeypatch):
+    import keyring
+
+    from emperor.data.hosted import read_key
+
+    provider = CONFIG.providers["kimi"]
+    assert provider.key_env == "Kimi_API_Key"
+    monkeypatch.setattr(keyring, "get_password", lambda service, user: "from-keyring")
+    monkeypatch.setenv("Kimi_API_Key", "from-env")
+    assert read_key(provider) == "from-env"
+    monkeypatch.delenv("Kimi_API_Key")
+    assert read_key(provider) == "from-keyring"
+    assert CONFIG.providers["deepseek"].key_env == "Deepseek_API_Key"
+
+
+def test_kimi_platform_keys_use_the_documented_endpoint():
+    assert CONFIG.providers["kimi"].base_url == "https://api.moonshot.ai/v1"

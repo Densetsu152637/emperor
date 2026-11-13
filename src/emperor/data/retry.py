@@ -13,7 +13,8 @@ from emperor.data.generate import (
     ROUND_SEED_STEP,
     SEED_MASK,
 )
-from emperor.data.shards import done_ids, iter_records, read_jsonl
+from emperor.data.records import current
+from emperor.data.shards import read_jsonl
 
 DEFAULT_RETRIES = 2
 
@@ -30,8 +31,8 @@ def retry_dirs(data_dir: Path) -> list[Path]:
 
 def kept_ids(directory: Path) -> set[str]:
     return {
-        s["id"]
-        for s in iter_records(directory / "judged")
+        i
+        for i, s in current(directory / "judged").items()
         if s.get("meta", {}).get("judge", {}).get("keep")
     }
 
@@ -41,7 +42,7 @@ def _round_complete(directory: Path) -> bool:
     if not prompts.exists():
         return False
     ids = {r["id"] for r in read_jsonl(prompts)}
-    finished = done_ids(directory / "rejects") | done_ids(directory / "judged")
+    finished = set(current(directory / "rejects")) | set(current(directory / "judged"))
     return ids <= finished
 
 

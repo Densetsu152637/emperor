@@ -113,10 +113,10 @@ in `data/`; the dataset goes to a private Hugging Face repository (`<org>/empero
 Teacher and simulator on DeepSeek, judge on Kimi (`configs/hosted.toml`); nothing runs on the
 GPU, so the idle gate does not apply. Training still waits for an idle machine.
 
-1. Check the keys exist (prints only present or missing):
+1. Check the keys are reachable (prints only whether each is found, never the value):
 
    ```powershell
-   uv run python -c "import keyring; [print(u, bool(keyring.get_password('emperor', u))) for u in ('deepseek', 'moonshot')]"
+   uv run python -c "from emperor.data.hosted import load_config, read_key; [print(n, bool(read_key(p))) for n, p in load_config().providers.items()]"
    ```
 
 2. Check the rates and budgets in `configs/hosted.toml` against the provider pages it cites,

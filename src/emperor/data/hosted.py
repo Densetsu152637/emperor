@@ -15,7 +15,8 @@ Provider behaviour that shapes the requests (checked against the official docs o
   carries tools, must be passed back on earlier assistant turns (generation already does).
   Usage reports `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens`. Prices halve
   off-peak; peak is 01:00-04:00 and 06:00-10:00 UTC, Monday to Friday.
-- Moonshot (`https://api.moonshot.ai/v1`), K3 series: always thinks (no `thinking` field;
+- Kimi Open Platform (`https://api.moonshot.ai/v1`, keys from platform.kimi.ai), K3 series:
+  always thinks (no `thinking` field;
   `reasoning_effort` low / high / max); `temperature`, `top_p`, `n` and the penalties are fixed
   and passing them is an error. Usage reports `prompt_tokens_details.cached_tokens` and
   `cache_write_tokens`.
@@ -25,6 +26,7 @@ Provider behaviour that shapes the requests (checked against the official docs o
 from __future__ import annotations
 
 import json
+import os
 import random
 import threading
 import time
@@ -70,6 +72,7 @@ class Provider:
     base_url: str
     key_user: str
     key_service: str = "emperor"
+    key_env: str | None = None  # an environment variable checked before the keyring entry
     budget_usd: float = 25.0
     max_concurrency: int = 8
     rates: dict[str, Rates] = field(default_factory=dict)
@@ -243,15 +246,21 @@ class Ledger:
 
 
 def read_key(provider: Provider) -> str:
-    """The provider's API key from the OS credential store. Never printed or logged."""
+    """The provider's API key: the environment variable `key_env` if set, otherwise the OS
+    credential store (keyring). Never printed, logged or written."""
+    if provider.key_env:
+        key = os.environ.get(provider.key_env, "").strip()
+        if key:
+            return key
     try:
         import keyring  # the `hosted` dependency group
-    except ImportError as error:
-        raise TeacherSetupError("keyring is not installed: uv sync --group hosted") from error
-    key = keyring.get_password(provider.key_service, provider.key_user)
+    except ImportError:
+        keyring = None
+    key = keyring.get_password(provider.key_service, provider.key_user) if keyring else None
     if not key:
         raise TeacherSetupError(
-            f"no API key for {provider.name}: store it with keyring under service "
+            f"no API key for {provider.name}: set the environment variable "
+            f"{provider.key_env or '(none configured)'} or store it with keyring under service "
             f"'{provider.key_service}', username '{provider.key_user}'"
         )
     return key

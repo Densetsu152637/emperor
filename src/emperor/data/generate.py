@@ -16,8 +16,9 @@ from typing import Protocol
 
 from emperor.data.parallel import run_items
 from emperor.data.prompts import PromptRecord
+from emperor.data.records import current
 from emperor.data.schema import LICENCE, MAX_TABLE_ROWS, table_rows, validate_sample
-from emperor.data.shards import ShardWriter, done_ids, read_jsonl
+from emperor.data.shards import ShardWriter, read_jsonl
 from emperor.data.style import STYLE
 from emperor.data.teacher import (
     TEACHER_MODEL,
@@ -56,6 +57,9 @@ class GenerationConfig:
     teacher_model: str = TEACHER_MODEL
     host: str = "local llama.cpp"  # where the teacher ran, recorded with every sample
     licence: str = LICENCE  # the terms the teacher's outputs are used under
+    # Recorded with every sample and reject: pipeline commit, config hash, model ids, guidance
+    # version and pilot number (hosted runs).
+    provenance: dict = field(default_factory=dict)
     retries: int = 2  # extra tries (new seed) when a trace fails the schema check
     force_first_tool: bool = True  # tool_choice "required" on the first turn
     direct_classes: frozenset[str] = field(default_factory=lambda: DIRECT_CLASSES)
@@ -507,6 +511,7 @@ def generate_trace(
             "seed": base_seed,
             "host": config.host,
             "attempt": config.attempt,
+            **config.provenance,  # a hosted run's commit, config, models, guidance and pilot
         },
     }
     check = validate_sample(sample)
@@ -559,7 +564,8 @@ def run_generation(
     config = config or GenerationConfig()
     traces = ShardWriter(out_dir / "traces", "traces")
     rejects = ShardWriter(out_dir / "rejects", "rejects")
-    finished = done_ids(out_dir / "traces") | done_ids(out_dir / "rejects")
+    # The latest record per id counts, and an excluded pilot's tasks are done again.
+    finished = set(current(out_dir / "traces")) | set(current(out_dir / "rejects"))
     todo = [PromptRecord(**r) for r in read_jsonl(prompts_path) if r["id"] not in finished]
     if limit is not None:
         todo = todo[:limit]
@@ -590,6 +596,7 @@ def run_generation(
                     "reason": reason,
                     "attempts": len(failures),
                     "attempt_failures": failures,
+                    **config.provenance,
                 }
             )
             counts["rejected"] += 1
