@@ -176,7 +176,7 @@ train = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "emperor", git = "https://github.com/Densetsu152637/emperor?rev=d49ceada80143319ed66752f62e9a0d3796196e3" }]
+requires-dist = [{ name = "emperor", editable = "../emperor" }]
 
 [package.metadata.requires-dev]
 data = [{ name = "httpx", specifier = ">=0.27" }]
@@ -362,7 +362,32 @@ wheels = [
 [[package]]
 name = "emperor"
 version = "0.0.0"
-source = { git = "https://github.com/Densetsu152637/emperor?rev=d49ceada80143319ed66752f62e9a0d3796196e3#d49ceada80143319ed66752f62e9a0d3796196e3" }
+source = { editable = "../emperor" }
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+data = [{ name = "httpx", specifier = ">=0.27" }]
+dev = [
+    { name = "pytest", specifier = ">=8" },
+    { name = "ruff", specifier = ">=0.8" },
+]
+hosted = [{ name = "keyring", specifier = ">=25" }]
+publish = [{ name = "huggingface-hub", specifier = ">=0.30" }]
+train = [
+    { name = "accelerate", specifier = ">=1.10" },
+    { name = "datasets", specifier = ">=4.0" },
+    { name = "flash-linear-attention", specifier = ">=0.6" },
+    { name = "peft", specifier = ">=0.17" },
+    { name = "protobuf", specifier = ">=4" },
+    { name = "safetensors", specifier = ">=0.5" },
+    { name = "sentencepiece", specifier = ">=0.2" },
+    { name = "torch", marker = "sys_platform != 'linux' and sys_platform != 'win32'", specifier = ">=2.8" },
+    { name = "torch", marker = "sys_platform == 'linux' or sys_platform == 'win32'", specifier = ">=2.8", index = "https://download.pytorch.org/whl/cu128" },
+    { name = "transformers", specifier = ">=4.56" },
+    { name = "triton-windows", marker = "sys_platform == 'win32'", specifier = ">=3.9,<3.10" },
+    { name = "trl", specifier = ">=1.0" },
+]
 
 [[package]]
 name = "filelock"

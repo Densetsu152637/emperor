@@ -6,15 +6,15 @@ __pycache__/
 dist/
 build/
 *.egg-info/
-# Training outputs and data live on the Hugging Face Hub, not in Git.
-/outputs/
-/checkpoints/
-/data/
-/weights/
-/runs/
+# Each model's training outputs and data live on the Hugging Face Hub, not in Git.
+/models/*/outputs/
+/models/*/checkpoints/
+/models/*/data/
+/models/*/weights/
+/models/*/runs/
 *.gguf
 *.safetensors
-/tools/
+/models/*/tools/
 
 # API keys live outside the repository (~/.emperor/.env); never commit a copy.
 .env

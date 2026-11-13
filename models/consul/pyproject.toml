@@ -43,8 +43,8 @@ publish = ["huggingface_hub>=0.30"]
 default-groups = ["dev", "data", "hosted"]
 
 [tool.uv.sources]
-# Pinned to emperor's feat/hosted-models branch (hosted clients and runner); re-pin to its merge commit.
-emperor = { git = "https://github.com/Densetsu152637/emperor", rev = "d49ceada80143319ed66752f62e9a0d3796196e3" }
+# Emperor is the sibling package in this repository.
+emperor = { path = "../emperor", editable = true }
 torch = { index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }
 
 [[tool.uv.index]]
