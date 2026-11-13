@@ -28,9 +28,9 @@ from emperor.data.teacher import (
     ENVIRONMENT_EFFORT,
     GENERATE_EFFORT,
     JUDGE_EFFORT,
-    JUDGE_MODEL,
     ChatClient,
     TeacherSetupError,
+    model_name,
 )
 from emperor.eval.cli import CONTEXT_TIERS
 from emperor.export.gguf import DEFAULT_CACHE, gguf_dir_for, gguf_name
@@ -362,7 +362,11 @@ class Pipeline:
         return {"status": "done", "prompts": len(own)}
 
     def _generation_config(self) -> GenerationConfig:
-        return GenerationConfig(retries=self.s.retries, force_first_tool=self.s.force_first_tool)
+        return GenerationConfig(
+            retries=self.s.retries,
+            force_first_tool=self.s.force_first_tool,
+            teacher_model=model_name(self.s.teacher_gguf),
+        )
 
     def _teacher_phase(self, name: str, work) -> dict:
         """The teacher's server: one slot per role (generation runs one request at a time)."""
@@ -410,9 +414,10 @@ class Pipeline:
 
     def _judge_work(self, directory: Path):
         def work(server, should_stop):
+            judge = model_name(self.s.judge_gguf)  # the weights this phase actually serves
             client = ChatClient(
                 f"http://127.0.0.1:{self.s.teacher_port}/v1",
-                model=JUDGE_MODEL,
+                model=judge,
                 reasoning_effort=self.s.judge_reasoning_effort,
                 template_kwargs={"enable_thinking": self.s.judge_thinking},
             )
@@ -423,7 +428,7 @@ class Pipeline:
                     threshold=self.s.threshold,
                     should_stop=should_stop,
                     log=log.debug,
-                    model=JUDGE_MODEL,
+                    model=judge,
                 )
             finally:
                 client.close()

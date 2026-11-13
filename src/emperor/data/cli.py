@@ -104,7 +104,7 @@ def cmd_generate(args) -> int:
             args.data_dir,
             client,
             environment,
-            config=generation_config(args),
+            config=generation_config(args, client.served_model()),
             limit=args.limit,
             log=lambda line: print(line, file=sys.stderr),
         )
@@ -118,18 +118,22 @@ def cmd_generate(args) -> int:
     return 0
 
 
-def generation_config(args):
+def generation_config(args, served: str | None = None):
     from emperor.data.generate import GenerationConfig
+    from emperor.data.teacher import TEACHER_MODEL
 
-    return GenerationConfig(retries=args.retries, force_first_tool=not args.no_force_tool)
+    return GenerationConfig(
+        retries=args.retries,
+        force_first_tool=not args.no_force_tool,
+        teacher_model=served or TEACHER_MODEL,  # the model the running server reports
+    )
 
 
 def judge_chat_client(args):
-    from emperor.data.teacher import JUDGE_MODEL, ChatClient
+    from emperor.data.teacher import ChatClient
 
     return ChatClient(
         args.base_url,
-        model=JUDGE_MODEL,
         reasoning_effort=args.judge_reasoning_effort,
         template_kwargs={"enable_thinking": not args.no_judge_thinking},
     )
@@ -137,12 +141,15 @@ def judge_chat_client(args):
 
 def cmd_judge(args) -> int:
     from emperor.data.judge import run_judging
+    from emperor.data.teacher import JUDGE_MODEL
 
     client = judge_chat_client(args)
     try:
         counts = run_judging(
             args.data_dir,
             client,
+            # Whatever the running server reports, so the verdict names the real judge.
+            model=client.served_model() or JUDGE_MODEL,
             threshold=args.threshold,
             limit=args.limit,
             log=lambda line: print(line, file=sys.stderr),

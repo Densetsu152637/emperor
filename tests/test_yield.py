@@ -349,3 +349,11 @@ def test_retry_phase_is_listed_between_judge_and_filter():
     from emperor.pipeline.run import PHASES
 
     assert PHASES.index("judge") + 1 == PHASES.index("retry") == PHASES.index("filter") - 1
+
+
+def test_recorded_model_names_come_from_the_served_gguf():
+    from emperor.data.teacher import model_name
+
+    assert model_name("D:/AI-Models/x/Qwen3.8-27B-UD-Q4_K_XL.gguf") == "Qwen3.8-27B-UD-Q4_K_XL"
+    assert model_name(r"F:\m\gpt-oss-120b-F16.gguf") == "gpt-oss-120b-F16"
+    assert model_name("Qwen3.8-27B") == "Qwen3.8-27B"  # an alias keeps its dots

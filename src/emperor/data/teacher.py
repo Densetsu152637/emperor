@@ -6,6 +6,7 @@ a hosted API. The teacher is Apache-2.0 licensed; every sample records that.
 
 import json
 import time
+from pathlib import Path, PurePath
 from urllib.parse import urlparse
 
 TEACHER_MODEL = "gpt-oss-120b"
@@ -46,6 +47,13 @@ GENERATE_EFFORT = "medium"
 JUDGE_EFFORT = "medium"
 ENVIRONMENT_EFFORT = "medium"  # the tool-result simulator: its output is context, not trained
 EFFORTS = ("low", "medium", "high")
+
+
+def model_name(gguf: str | Path) -> str:
+    """The name recorded for a served GGUF: its file name without the extension, so a sample
+    names the exact weights and quantisation that produced or judged it."""
+    name = PurePath(str(gguf).replace("\\", "/")).name
+    return name[: -len(".gguf")] if name.lower().endswith(".gguf") else name
 
 
 def _error_text(response) -> str:
@@ -147,6 +155,16 @@ class ChatClient:
         if server_rejected == self.retries:
             raise TeacherOutputError(f"server rejected the output {self.retries} times: {last}")
         raise TeacherError(f"teacher request failed after {self.retries} tries: {last}")
+
+    def served_model(self) -> str | None:
+        """The model the server reports at /v1/models (llama-server gives the GGUF path or its
+        alias), as `model_name` records it; None when the server does not say."""
+        try:
+            response = self._http.get(f"{self.base_url}/models")
+            response.raise_for_status()
+            return model_name(response.json()["data"][0]["id"])
+        except Exception:
+            return None
 
     def wait_until_ready(self, seconds: float = 300.0) -> bool:
         """Poll the server's /health until it reports ready; False on timeout."""
