@@ -477,7 +477,10 @@ def generate_trace(
         )
         content = (rewrite.get("content") or "").strip()
         if content:
-            stored[-1] = {**stored[-1], "content": content}
+            # The stored turn takes the rewrite's reasoning too: the original reasoning led to the
+            # table, so keeping it would pair one answer with another answer's thinking.
+            final = {k: v for k, v in stored[-1].items() if k != "reasoning_content"}
+            stored[-1] = with_reasoning({**final, "content": content}, reasoning_of(rewrite))
     if table_rows("\n".join(m.get("content") or "" for m in stored[2:])) > MAX_TABLE_ROWS:
         return None, "markdown_table"
 
