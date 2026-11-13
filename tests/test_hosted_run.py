@@ -107,3 +107,94 @@ def test_stop_file_stops_before_the_next_phase(tmp_path, monkeypatch):
     (tmp_path / "runs" / "r1" / "STOP").write_text("", encoding="utf-8")
     code, status, made = run(tmp_path, monkeypatch)
     assert code == 0 and status["state"] == "stopped" and not made
+
+
+def task_texts(fake):
+    """The user tasks the teacher worked on (not the ping or the reasoning preflight)."""
+    from emperor.data.generate import _PREFLIGHT_USER
+
+    return {t for t in fake.tasks if t != _PREFLIGHT_USER}
+
+
+class CountingFake(Fake):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.tasks = set()
+
+    def chat(self, messages, *, tools=None, **kwargs):
+        if tools and self.role == "teacher":
+            self.tasks.add(messages[1]["content"])
+        return super().chat(messages, tools=tools, **kwargs)
+
+
+def counting_run(tmp_path, monkeypatch, *extra, config=None):
+    made = {}
+
+    def make_clients(cfg, ledger, roles, should_stop=lambda: False):
+        for role in roles:
+            made[role] = CountingFake(role, ledger)
+        return {role: made[role] for role in roles}
+
+    monkeypatch.setattr(hosted, "make_clients", make_clients)
+    argv = [
+        "--root", str(tmp_path), "--config", str(config or ROOT / "configs" / "hosted.toml"),
+        "--data-dir", "data", "--run-dir", "runs/full", "--prompts", "6", "--workers", "2",
+        "--only", "prompts", "--only", "generate", "--only", "judge", "--only", "filter",
+        *extra,
+    ]  # fmt: skip
+    assert hosted.main(argv) == 0
+    return made
+
+
+def test_a_full_run_resumes_after_pilots_counts_their_samples_and_skips_their_tasks(
+    tmp_path, monkeypatch
+):
+    pilot = counting_run(tmp_path, monkeypatch, "--pilot", "1", "--limit", "2")
+    assert len(task_texts(pilot["teacher"])) == 2
+    full = counting_run(tmp_path, monkeypatch)
+    assert len(task_texts(full["teacher"])) == 4  # only the tasks the pilot did not do
+    assert not task_texts(pilot["teacher"]) & task_texts(full["teacher"])
+    judged = list(iter_records(tmp_path / "data" / "judged"))
+    assert len(judged) == 6 and len({s["id"] for s in judged}) == 6  # no duplicates
+    pilots = [s for s in judged if s["meta"].get("pilot") == 1]
+    assert len(pilots) == 2
+    for sample in judged:
+        meta = sample["meta"]
+        assert {"pipeline_commit", "config_hash", "guidance", "models"} <= set(meta)
+        assert set(meta["models"]) == {"teacher", "simulator", "judge"}
+    final = list(iter_records(tmp_path / "data" / "final"))
+    assert len(final) == 6 and sum(1 for s in final if s["meta"].get("pilot") == 1) == 2
+
+
+def test_an_excluded_pilot_is_generated_again_and_never_reaches_the_final_set(
+    tmp_path, monkeypatch
+):
+    counting_run(tmp_path, monkeypatch, "--pilot", "1", "--limit", "2")
+    full = counting_run(
+        tmp_path, monkeypatch, "--exclude-pilot", "1=teacher prompt bug fixed in pilot 2"
+    )
+    assert len(task_texts(full["teacher"])) == 6
+    exclusions = json.loads((tmp_path / "data" / "excluded-pilots.json").read_text())
+    assert exclusions == {"1": "teacher prompt bug fixed in pilot 2"}
+    final = list(iter_records(tmp_path / "data" / "final"))
+    assert len(final) == 6 and not any(s["meta"].get("pilot") == 1 for s in final)
+    report = (
+        json.loads((tmp_path / "data" / "report.json").read_text())
+        if (tmp_path / "data" / "report.json").exists()
+        else None
+    )
+    assert report is None or report["excluded_pilots"] == exclusions
+
+
+def test_changed_judge_settings_rejudge_pilot_samples_without_the_teacher(tmp_path, monkeypatch):
+    counting_run(tmp_path, monkeypatch, "--pilot", "1", "--limit", "2")
+    text = (ROOT / "configs" / "hosted.toml").read_text(encoding="utf-8")
+    judge = text.index("[roles.judge]")
+    low = tmp_path / "low.toml"
+    low.write_text(text[:judge] + text[judge:].replace('"high"', '"low"', 1), encoding="utf-8")
+    again = counting_run(tmp_path, monkeypatch, "--pilot", "1", "--limit", "0", config=low)
+    assert not task_texts(again["teacher"])  # no teacher tokens
+    judged = list(iter_records(tmp_path / "data" / "judged"))
+    assert len(judged) == 4  # two verdicts per pilot sample; the latest counts
+    final = list(iter_records(tmp_path / "data" / "final"))
+    assert len(final) == 2

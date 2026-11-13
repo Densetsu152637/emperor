@@ -39,7 +39,7 @@ from emperor.data.hosted import (
     load_config,
     make_clients,
 )
-from emperor.data.shards import iter_records
+from emperor.data.records import current, exclude_pilot, exclusions, fingerprint
 from emperor.data.teacher import TeacherError, TeacherSetupError
 
 log = logging.getLogger("emperor.hosted")
@@ -52,11 +52,12 @@ def count_dir(directory: Path) -> dict:
     prompts = 0
     if prompts_file.exists():
         prompts = sum(1 for line in prompts_file.read_text(encoding="utf-8").splitlines() if line)
-    rejects = Counter(r.get("reason", "unknown") for r in iter_records(directory / "rejects"))
-    traces = sum(1 for _ in iter_records(directory / "traces"))
+    # The latest record per id, without excluded pilots: what a resume and the filter count.
+    rejects = Counter(r.get("reason", "unknown") for r in current(directory / "rejects").values())
+    traces = len(current(directory / "traces"))
     judged = kept = 0
     judge_rejects: Counter = Counter()
-    for sample in iter_records(directory / "judged"):
+    for sample in current(directory / "judged").values():
         judged += 1
         verdict = sample.get("meta", {}).get("judge", {})
         if verdict.get("keep"):
@@ -169,6 +170,8 @@ class HostedRun:
             "usd_per_task": round(usd_per_task, 5) if usd_per_task else None,
             "projected_usd_main_pass": round(usd_per_task * prompts, 2) if usd_per_task else None,
             "phases_done": self.state["phases"],
+            "pilot": self.args.pilot,
+            "excluded_pilots": exclusions(self.data_dir),
         }
         self.run_dir.mkdir(parents=True, exist_ok=True)
         tmp = self.run_dir / "status.tmp"
@@ -223,7 +226,77 @@ class HostedRun:
             host=self.host,
             licence=self.licence,
             attempt=attempt,
+            provenance=self.provenance(),
         )
+
+    # -- provenance ----------------------------------------------------------------------------
+
+    def guidance(self) -> str:
+        """A version of everything the teacher and simulator are told (prompts, style)."""
+        from emperor.data.generate import _ENV_SYSTEM, TABLE_REWRITE, teacher_system
+
+        return fingerprint(teacher_system(65536) + _ENV_SYSTEM + TABLE_REWRITE)
+
+    def rubric(self) -> str:
+        """A version of what the judge is told."""
+        from emperor.data.style import CLASS_NOTES, judge_system
+
+        return fingerprint(judge_system() + json.dumps(CLASS_NOTES, sort_keys=True))
+
+    def commit(self) -> str:
+        try:
+            head = subprocess.run(
+                ["git", "-C", str(self.root), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            dirty = subprocess.run(
+                ["git", "-C", str(self.root), "status", "--porcelain", "--untracked-files=no"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError):
+            return "unknown"
+        return head + ("+dirty" if dirty else "")
+
+    def provenance(self) -> dict:
+        """Recorded with every sample and reject, so a pilot's samples can be told apart and,
+        if a later fix shows its setup was defective, excluded."""
+        if not hasattr(self, "_provenance"):
+            roles = {
+                name: {
+                    "model": role.model,
+                    "base_url": self.config.providers[role.provider].base_url,
+                    "thinking": role.thinking,
+                    "reasoning_effort": role.reasoning_effort,
+                    "max_tokens": role.max_tokens,
+                }
+                for name, role in self.config.roles.items()
+            }
+            self._provenance = {
+                "pilot": self.args.pilot,
+                "pipeline_commit": self.commit(),
+                "config_hash": fingerprint(roles),
+                "guidance": self.guidance(),
+                "models": {
+                    "teacher": self.names.get("teacher", self.config.roles["teacher"].model),
+                    "simulator": self.names.get("simulator", self.config.roles["simulator"].model),
+                    "judge": self.config.roles["judge"].model,
+                },
+            }
+        return self._provenance
+
+    def judge_settings(self) -> dict:
+        """What a verdict depends on; a sample judged under other settings is judged again."""
+        role = self.config.roles["judge"]
+        return {
+            "model": role.model,
+            "reasoning_effort": role.reasoning_effort,
+            "threshold": self.args.threshold,
+            "rubric": self.rubric(),
+        }
 
     def _generate(self, directory: Path, attempt: int = 0) -> dict:
         from emperor.data.generate import run_generation
@@ -238,6 +311,7 @@ class HostedRun:
             should_stop=self.should_stop,
             log=log.debug,
             workers=self.workers("teacher"),
+            limit=self.args.limit,
         )
 
     def _judge(self, directory: Path) -> dict:
@@ -252,6 +326,7 @@ class HostedRun:
             should_stop=self.should_stop,
             log=log.debug,
             workers=self.workers("judge"),
+            settings=self.judge_settings(),
         )
 
     def phase_generate(self) -> dict:
@@ -356,6 +431,18 @@ def build_parser(prog: str = "hosted") -> argparse.ArgumentParser:
         "--only", action="append", default=[], help="run just this phase (repeatable)"
     )
     parser.add_argument("--detach", action="store_true", help="run in the background")
+    pilots = parser.add_argument_group("pilots (they write into the full run's data dir)")
+    pilots.add_argument("--pilot", type=int, help="pilot number, recorded with every sample")
+    pilots.add_argument(
+        "--limit", type=int, help="generate only the next N undone tasks of the pool"
+    )
+    pilots.add_argument(
+        "--exclude-pilot",
+        action="append",
+        default=[],
+        metavar="N=REASON",
+        help="exclude a pilot's samples (its tasks are generated again); recorded in the data dir",
+    )
     return parser
 
 
@@ -422,6 +509,11 @@ def main(
     )
     for noisy in ("httpx", "httpcore"):  # request lines would only repeat the status file
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    for item in args.exclude_pilot:
+        pilot, _, reason = item.partition("=")
+        if not pilot.strip().isdigit() or not reason.strip():
+            raise SystemExit(f"--exclude-pilot needs N=REASON, got {item!r}")
+        exclude_pilot((args.root / args.data_dir).resolve(), int(pilot), reason.strip())
     outcome = run_class(args, configure(args)).run()
     print(json.dumps({"status": outcome, "status_file": str(run_dir / "status.json")}))
     return {"done": 0, "stopped": 0, "budget": 3}.get(outcome, 1)
