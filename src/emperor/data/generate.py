@@ -140,6 +140,12 @@ Never include credentials, API keys, tokens or private endpoints in any result.
 
 ENV_HISTORY_RESULTS = 6  # earlier results the simulator sees, newest last
 ENV_HISTORY_CHARS = 1200  # of each
+# The batched await's reply budget. The two role slots share one KV buffer (24,576 tokens): the
+# teacher's slot holds up to about 14,600 (a 10,500-token prompt plus a 4,096-token reply). With
+# 8,192 here the simulator's slot reached 11,900 in a direct test, the server ran out of KV
+# space and purged the teacher's cached prompt (no error, but about 100 s of re-prefill on the
+# teacher's next turn). Reports are 60-180 words each; any the batch leaves out is written alone.
+BATCH_REPORT_TOKENS = 4096
 
 
 class Environment:
@@ -251,7 +257,7 @@ class Environment:
             f"User task: {self.task_text}\n\nTool: await_tasks, {len(briefs)} subagents.\n\n"
             f"{parts}\n\nWrite each subagent's report, in this order. Start each one with a line "
             "holding only `### <subagent id>` (for example `### t1`), then the report.",
-            max_tokens=min(8192, self.max_tokens * len(briefs)),
+            max_tokens=min(BATCH_REPORT_TOKENS, self.max_tokens * len(briefs)),
         )
         return split_reports(text, list(briefs))
 
