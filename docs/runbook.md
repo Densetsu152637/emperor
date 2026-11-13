@@ -115,10 +115,12 @@ Consul (2,000 tasks each, resuming from the pilot data, DeepSeek off-peak only, 
 budget caps paused and resumed), then filter, train, merge, export (bf16 and GGUF), eval and
 card for Emperor and then Consul, one model at a time on the GPU and only while the user is
 idle. Training takes its length from the data (p99, at most 32K) with activations offloaded to
-RAM. Nothing is published.
+RAM. Nothing is published. Budgets are one pool per provider for both models, in
+`runs/full/budgets.json` (DeepSeek $95, Kimi $37 by default); a stage paused on its cap goes
+on within 30 minutes of the pool being raised there.
 
 ```powershell
-python scripts/full_run.py start --deepseek-budget 75 --kimi-budget 30
+python scripts/full_run.py start
 python scripts/full_run.py status     # runs/full/status.json
 python scripts/full_run.py stop       # then `start` again to resume
 ```

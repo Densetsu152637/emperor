@@ -40,3 +40,30 @@ def test_stage_completion_is_read_from_the_run_state(tmp_path):
     state.write_text(json.dumps({"phases": phases}), encoding="utf-8")
     assert full_run.hosted_done(repo)
     assert not full_run.build_done(repo)
+
+
+def test_budgets_are_one_pool_per_provider_reread_each_time(tmp_path, monkeypatch):
+    monkeypatch.setattr(full_run, "BUDGETS", tmp_path / "budgets.json")
+    emperor, consul = tmp_path / "emperor", tmp_path / "consul"
+    ledger = consul / "data" / "hosted-1" / "spend.jsonl"
+    ledger.parent.mkdir(parents=True)
+    rows = [{"provider": "deepseek", "usd": 20.0}, {"provider": "kimi", "usd": 7.5}]
+    ledger.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    flags = full_run.stage_budgets(emperor, [consul])
+    assert flags == ["--budget", "deepseek=75.00", "--budget", "kimi=29.50"]  # 95-20, 37-7.5
+    (tmp_path / "budgets.json").write_text('{"deepseek": 120}', encoding="utf-8")
+    assert full_run.stage_budgets(emperor, [consul])[1] == "deepseek=100.00"
+
+
+def test_pilot_data_is_seeded_without_the_held_out_set(tmp_path):
+    class Args:
+        pilot_data_root = str(tmp_path)
+
+    source = tmp_path / "consul-hosted" / "data" / "hosted-1"
+    (source / "eval").mkdir(parents=True)
+    (source / "eval" / "heldout.jsonl").write_text("{}\n", encoding="utf-8")
+    (source / "prompts.jsonl").write_text("{}\n", encoding="utf-8")
+    repo = tmp_path / "consul"
+    full_run.seed_pilot_data(repo, Args())
+    assert (repo / "data" / "hosted-1" / "prompts.jsonl").exists()
+    assert not (repo / "data" / "hosted-1" / "eval").exists()

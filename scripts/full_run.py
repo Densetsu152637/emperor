@@ -12,11 +12,15 @@ Nothing is published to Hugging Face.
 
 Run it from anywhere with Python 3.12+ (standard library only):
 
-    python scripts/full_run.py start [--deepseek-budget 75 --kimi-budget 30]
+    python scripts/full_run.py start
     python scripts/full_run.py status
     python scripts/full_run.py stop      # the running stage stops cleanly; `start` resumes
 
-Budgets are per model's ledger (each repo's `data/hosted-1/spend.jsonl`), in USD.
+Budgets are one pool per provider for the whole run, both models together, in USD, read from
+`<emperor>/runs/full/budgets.json` ({"deepseek": 95, "kimi": 37} by default) every time a
+stage starts: each model's hosted stage gets the pool minus what the other model's ledger
+(`data/hosted-1/spend.jsonl`) has spent. Raise a value in that file while a stage is paused on
+its cap and it carries on at the next check (every 30 minutes); no restart is needed.
 State, logs and `status.json` live in `<emperor>/runs/full/`.
 """
 
@@ -36,6 +40,8 @@ from pathlib import Path
 EMPEROR = Path(__file__).resolve().parents[1]
 HOME = EMPEROR / "runs" / "full"
 STATUS, LOG, PID, STOP = (HOME / n for n in ("status.json", "full_run.log", "full_run.pid", "STOP"))
+BUDGETS = HOME / "budgets.json"
+DEFAULT_BUDGETS = {"deepseek": 95.0, "kimi": 37.0}  # the user's top-up, both models together
 DATA = "data/hosted-1"
 BUDGET_WAIT = 1800  # seconds between checks while a provider's budget cap holds a stage
 RESTART_WAIT = 300
@@ -106,12 +112,46 @@ def run(command: list[str], repo: Path, run_dir: Path, state: dict, stage: str) 
 
 
 def seed_pilot_data(repo: Path, args) -> None:
-    """The pilots ran in the hosted worktrees; their data counts towards the full run."""
+    """The pilots ran in the hosted worktrees; their data counts towards the full run. The
+    held-out set (`eval/`) is not copied: the prompts phase builds it from the task pool."""
     target = repo / DATA
     source = Path(args.pilot_data_root) / f"{repo.name}-hosted" / DATA
     if not target.exists() and source.exists():
-        shutil.copytree(source, target)
+        shutil.copytree(
+            source, target, ignore=shutil.ignore_patterns("eval", ".hosted.lock", "*.tmp")
+        )
         log(f"{repo.name}: pilot data copied from {source}")
+
+
+def budgets() -> dict[str, float]:
+    """The pool per provider, re-read every time (edit runs/full/budgets.json to raise it)."""
+    if not BUDGETS.exists():
+        BUDGETS.parent.mkdir(parents=True, exist_ok=True)
+        BUDGETS.write_text(json.dumps(DEFAULT_BUDGETS, indent=1), encoding="utf-8")
+    pool = {**DEFAULT_BUDGETS, **read_json(BUDGETS)}
+    return {k: float(v) for k, v in pool.items()}
+
+
+def spent(repo: Path) -> dict[str, float]:
+    totals: dict[str, float] = {}
+    ledger = repo / DATA / "spend.jsonl"
+    if ledger.exists():
+        for line in ledger.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            totals[row["provider"]] = totals.get(row["provider"], 0.0) + row["usd"]
+    return totals
+
+
+def stage_budgets(repo: Path, others: list[Path]) -> list[str]:
+    """This model's caps: the pool less what the other model has spent."""
+    flags = []
+    for provider, pool in budgets().items():
+        other = sum(spent(o).get(provider, 0.0) for o in others)
+        flags += ["--budget", f"{provider}={max(pool - other, 0.0):.2f}"]
+    return flags
 
 
 def hosted_done(repo: Path) -> bool:
@@ -124,29 +164,34 @@ def hosted_done(repo: Path) -> bool:
 
 def data_stage(name: str, repo: Path, args, state: dict) -> bool:
     seed_pilot_data(repo, args)
-    budget = [
-        "--budget", f"deepseek={args.deepseek_budget}", "--budget", f"kimi={args.kimi_budget}"
-    ]  # fmt: skip
-    command = [
-        str(venv_python(repo)), "-m", f"{name}.pipeline.hosted", "--root", str(repo),
-        "--data-dir", DATA, "--run-dir", "runs/full-hosted", "--prompts", "2000", *budget,
-    ]  # fmt: skip
+    others = [r for r in repos(args).values() if r != repo]
     restarts = 0
     while not hosted_done(repo):
         if STOP.exists():
             return False
+        command = [
+            str(venv_python(repo)), "-m", f"{name}.pipeline.hosted", "--root", str(repo),
+            "--data-dir", DATA, "--run-dir", "runs/full-hosted", "--prompts", "2000",
+            *stage_budgets(repo, others),
+        ]  # fmt: skip
         code = run(command, repo, repo / "runs" / "full-hosted", state, f"{name} data")
         if STOP.exists():
             return False
-        if code == 3:  # a budget cap: wait for it to be raised, then go on
-            state["note"] = f"{name}: a provider budget is spent; raise --*-budget and restart"
+        if code == 3:  # a budget cap: wait for it to be raised in budgets.json, then go on
+            state["note"] = f"{name}: a provider's budget pool is spent; raise it in {BUDGETS}"
             write_status(state)
             log(state["note"])
             time.sleep(BUDGET_WAIT)
             continue
         if not hosted_done(repo):
+            # Stopped on an error (exit 1: a setup problem such as a retired model) or a crash:
+            # not done. Wait, then try again; the status says why.
             restarts += 1
-            log(f"{name} data: not finished (exit {code}); restart {restarts}")
+            state["note"] = (
+                f"{name} data stopped (exit {code}); see {repo}/runs/full-hosted/hosted.log"
+            )
+            write_status(state)
+            log(f"{state['note']}; restart {restarts}")
             time.sleep(RESTART_WAIT)
     state.pop("note", None)
     return True
@@ -219,7 +264,17 @@ def build_stage(name: str, repo: Path, args, state: dict) -> bool:
 
 def orchestrate(args) -> int:
     HOME.mkdir(parents=True, exist_ok=True)
-    PID.write_text(str(os.getpid()), encoding="utf-8")
+    try:  # one full run at a time
+        handle = os.open(PID, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        holder = PID.read_text(encoding="utf-8").strip()
+        if holder.isdigit() and _alive(int(holder)):
+            print(f"another full run (pid {holder}) is running")
+            return 1
+        PID.unlink(missing_ok=True)
+        handle = os.open(PID, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    with os.fdopen(handle, "w", encoding="utf-8") as out:
+        out.write(str(os.getpid()))
     state = {"pid": os.getpid(), "repos": {k: str(v) for k, v in repos(args).items()}}
     log(f"full run {os.getpid()} started")
     try:
@@ -239,10 +294,30 @@ def orchestrate(args) -> int:
         PID.unlink(missing_ok=True)
 
 
+def _alive(pid: int) -> bool:
+    if os.name == "nt":
+        import ctypes
+
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return False
+        code = ctypes.c_ulong()
+        ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return code.value == 259
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
 def start(argv: list[str]) -> int:
     if PID.exists():
-        print(f"already running? {PID} holds {PID.read_text().strip()}; remove it if stale")
-        return 1
+        holder = PID.read_text(encoding="utf-8").strip()
+        if holder.isdigit() and _alive(int(holder)):
+            print(f"already running (pid {holder})")
+            return 1
     STOP.unlink(missing_ok=True)
     HOME.mkdir(parents=True, exist_ok=True)
     flags = 0
@@ -271,8 +346,6 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--consul", default=str(EMPEROR.parent / "consul"))
     p.add_argument("--pilot-data-root", default=str(EMPEROR.parent),
                    help="where the <repo>-hosted worktrees with the pilot data are")  # fmt: skip
-    p.add_argument("--deepseek-budget", type=float, default=75.0)
-    p.add_argument("--kimi-budget", type=float, default=30.0)
     p.add_argument("--skip-sync", action="store_true", help="do not uv sync before training")
     return p
 
