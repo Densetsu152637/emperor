@@ -68,11 +68,13 @@ def test_a_final_table_is_rewritten_by_the_teacher():
     table = "\n".join(["| a | b |"] * 6)
     script = good_script()
     script[-1] = {"content": table, "reasoning_content": "Summarise."}
-    teacher = ScriptedTeacher([*script, {"content": "- a: b\n- a: b"}])
+    rewrite = {"content": "- a: b\n- a: b", "reasoning_content": "List it instead."}
+    teacher = ScriptedTeacher([*script, rewrite])
     sample, reason = generate_trace(record(), teacher, FakeEnv())
     assert reason is None
     assert sample["messages"][-1]["content"] == "- a: b\n- a: b"
-    assert sample["messages"][-1]["reasoning_content"] == "Summarise."
+    # The stored turn carries the reasoning that produced the rewrite, not the table's.
+    assert sample["messages"][-1]["reasoning_content"] == "List it instead."
 
 
 def test_style_forbids_tables_and_demands_tools_first():
