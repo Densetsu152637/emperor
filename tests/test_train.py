@@ -298,3 +298,32 @@ def test_fp32_base_tensors_are_found_under_text_model_names(tmp_path):
         )
     }
     assert text_name("model.layers.1.mlp.up_proj.weight") == "model.layers.1.mlp.up_proj.weight"
+
+
+def test_offloading_is_opt_in_and_wraps_the_training_step():
+    from contextlib import contextmanager
+
+    from emperor.train.sft import offloading_trainer
+
+    assert parse_config({}).train.offload_activations is False
+    assert parse_config({"train": {"offload_activations": True}}).train.offload_activations
+
+    entered = []
+
+    class Graph:
+        @staticmethod
+        @contextmanager
+        def save_on_cpu(pin_memory):
+            entered.append(pin_memory)
+            yield
+
+    class Torch:
+        class autograd:
+            graph = Graph
+
+    class Base:
+        def training_step(self, *args, **kwargs):
+            return "loss"
+
+    trainer = offloading_trainer(Base, Torch)()
+    assert trainer.training_step() == "loss" and entered == [True]

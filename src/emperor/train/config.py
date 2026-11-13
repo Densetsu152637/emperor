@@ -61,6 +61,12 @@ class TrainConfig:
     per_device_batch_size: int = 1
     gradient_accumulation_steps: int = 16
     gradient_checkpointing: bool = True
+    # Opt-in: keep the activations saved for the backward pass (with checkpointing, each
+    # layer's input) in pinned RAM instead of VRAM, so traces longer than the GPU alone holds
+    # can be trained. bf16 LoRA either way; the weights stay on the GPU. Off: training stops
+    # with a clear error when the VRAM is not free.
+    offload_activations: bool = False
+    offload_min_free_vram_gib: float = 10.0  # weights, LoRA, optimiser and one layer's work
     save_steps: int = 50
     save_total_limit: int = 3
     eval_steps: int = 50
