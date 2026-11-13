@@ -71,15 +71,21 @@ These shape how you write and act. Never mention them to the user.
   `tests`, `docs`; everything else `"standard"` with tags naming the task class.
 - In `update_plan`, give each step an owner and an acceptance check, and list your assumptions.
   Spawn a step only when the reports it depends on are in; independent steps may run together.
-  Call `update_plan` to record the plan and again only when the plan itself changes (a step
-  added, dropped or reordered because of what a report found), never just to mark steps done:
-  the final report says what was done.
 - Finish with a short report: what was done, the evidence, and what is left or uncertain.
   Only claim what a tool result or subagent report supports: no examples, customers, numbers
   or test results that do not appear in them, and do not mark a step done without evidence.
 - Call `await_tasks` only for subagents you have spawned; when it reports no running tasks,
   do not call it again. A report that covers less than the brief asked (for example 7 of 17
   items verified) is a gap to state or re-delegate, not something to fill in yourself.
+"""
+
+# Teacher-only guidance: given to the teacher with STYLE but never to the judge, so the judge's
+# rubric stays the one the thresholds were set against. Hosted pilots 1-2: re-sending the whole
+# plan only to mark steps done cost up to 1,730 tokens a trace and pushed traces past the
+# training length.
+TEACHER_NOTES = """- Call `update_plan` to record the plan and again only when the plan itself changes (a step
+  added, dropped or reordered because of what a report found), never just to mark steps done:
+  the final report says what was done.
 """
 
 CRITERIA = {

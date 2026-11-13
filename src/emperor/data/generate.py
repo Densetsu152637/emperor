@@ -20,7 +20,7 @@ from emperor.data.prompts import PromptRecord
 from emperor.data.records import current
 from emperor.data.schema import LICENCE, MAX_TABLE_ROWS, table_rows, validate_sample
 from emperor.data.shards import ShardWriter, read_jsonl
-from emperor.data.style import STYLE
+from emperor.data.style import STYLE, TEACHER_NOTES
 from emperor.data.teacher import (
     TEACHER_MODEL,
     TeacherContextError,
@@ -129,7 +129,7 @@ def teacher_system(context_tokens: int) -> str:
     server reuses its cached prefix instead of reprocessing about 2,000 tokens per task."""
     shapes = "\n\n".join(prompt(name).strip() for name in ("plan", "questions", "brief"))
     budget = system_prompt(context_tokens).rstrip().rsplit("\n", 1)[1]
-    return f"{prompt('emperor-root').rstrip()}\n\n{shapes}\n\n{STYLE}\n{budget}\n"
+    return f"{prompt('emperor-root').rstrip()}\n\n{shapes}\n\n{STYLE}{TEACHER_NOTES}\n{budget}\n"
 
 
 _ENV_SYSTEM = """\

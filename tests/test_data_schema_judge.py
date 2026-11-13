@@ -183,3 +183,24 @@ def test_the_judge_never_sees_the_teachers_reasoning(sample):
         if message["role"] == "assistant":
             message["reasoning_content"] = "SECRET-CHAIN-OF-THOUGHT"
     assert "SECRET-CHAIN-OF-THOUGHT" not in render_transcript(sample)
+
+
+def test_the_judge_prompt_and_rubric_match_main():
+    """The judge's rubric is what the thresholds were set against: teacher-only guidance
+    (TEACHER_NOTES) must not reach it. Hashes of main's judge prompts (emperor 95a0bfd)."""
+    import hashlib
+
+    from emperor.data.generate import teacher_system
+    from emperor.data.style import TEACHER_NOTES, judge_system
+
+    expected = {
+        None: "1fad76b23e6f4a3c",
+        "quick_answer": "d0a86f51c1b478c5",
+        "clarify": "39da27437fad666f",
+        "coding": "1fad76b23e6f4a3c",
+    }
+    for task_class, digest in expected.items():
+        text = judge_system(task_class)
+        assert hashlib.sha256(text.encode()).hexdigest()[:16] == digest, task_class
+        assert TEACHER_NOTES.strip() not in text
+    assert TEACHER_NOTES.strip() in teacher_system(65536)
