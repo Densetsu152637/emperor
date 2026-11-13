@@ -400,9 +400,12 @@ def main(
     run_class: type[HostedRun] = HostedRun,
     module: str = "emperor.pipeline.hosted",
     prog: str = "hosted",
+    parser: argparse.ArgumentParser | None = None,
 ) -> int:
+    """Another model's package passes its own `run_class`, `module` and `parser` (built on
+    `build_parser`) to reuse this runner with its own phases."""
     argv = list(sys.argv[1:] if argv is None else argv)
-    args = build_parser(prog).parse_args(argv)
+    args = (parser or build_parser(prog)).parse_args(argv)
     if args.run_dir is None:
         args.run_dir = Path("runs") / f"hosted-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}"
     run_dir = (args.root / args.run_dir).resolve()
