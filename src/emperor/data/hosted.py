@@ -116,6 +116,7 @@ class HostedConfig:
     providers: dict[str, Provider]
     roles: dict[str, Role]
     source: Path | None = None
+    env_file: Path | None = None  # KEY=VALUE lines, checked after the process environment
 
     def role(self, name: str) -> tuple[Role, Provider]:
         role = self.roles[name]
@@ -131,12 +132,18 @@ def load_config(path: Path = DEFAULT_CONFIG) -> HostedConfig:
         peaks = [tuple(p) for p in raw.pop("peak_hours_utc", [])]
         providers[name] = Provider(name=name, rates=rates, peak_hours_utc=peaks, **raw)
     roles = {name: Role(name=name, **raw) for name, raw in data.get("roles", {}).items()}
+    env_file = data.get("keys", {}).get("env_file")
     for role in roles.values():
         if role.provider not in providers:
             raise ValueError(f"role {role.name}: unknown provider {role.provider}")
         if role.model not in providers[role.provider].rates:
             raise ValueError(f"role {role.name}: no rates for {role.model} in {role.provider}")
-    return HostedConfig(providers=providers, roles=roles, source=Path(path))
+    return HostedConfig(
+        providers=providers,
+        roles=roles,
+        source=Path(path),
+        env_file=Path(env_file).expanduser() if env_file else None,
+    )
 
 
 # -- spend ------------------------------------------------------------------------------------
@@ -245,11 +252,34 @@ class Ledger:
 # -- the client -------------------------------------------------------------------------------
 
 
-def read_key(provider: Provider) -> str:
-    """The provider's API key: the environment variable `key_env` if set, otherwise the OS
-    credential store (keyring). Never printed, logged or written."""
+def read_env_file(path: Path | None, name: str) -> str:
+    """One variable from a `.env` file (KEY=VALUE lines; `#` comments, an optional `export`
+    and surrounding quotes allowed). Read only for this process: nothing is exported to the
+    environment, so child processes never inherit the key."""
+    if not path or not name or not Path(path).is_file():
+        return ""
+    for line in Path(path).read_text(encoding="utf-8-sig").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.removeprefix("export ").partition("=")
+        if key.strip() == name:
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            return value.strip()
+    return ""
+
+
+def read_key(provider: Provider, env_file: Path | None = None) -> str:
+    """The provider's API key, from the first source that has it: the process environment
+    variable `key_env`, the same name in `env_file`, then the OS credential store (keyring).
+    Never printed, logged or written."""
     if provider.key_env:
         key = os.environ.get(provider.key_env, "").strip()
+        if key:
+            return key
+        key = read_env_file(env_file, provider.key_env)
         if key:
             return key
     try:
@@ -259,9 +289,9 @@ def read_key(provider: Provider) -> str:
     key = keyring.get_password(provider.key_service, provider.key_user) if keyring else None
     if not key:
         raise TeacherSetupError(
-            f"no API key for {provider.name}: set the environment variable "
-            f"{provider.key_env or '(none configured)'} or store it with keyring under service "
-            f"'{provider.key_service}', username '{provider.key_user}'"
+            f"no API key for {provider.name}: set {provider.key_env or '(no variable configured)'}"
+            f" in the environment or in {env_file or '(no env_file configured)'}, or store it with "
+            f"keyring under service '{provider.key_service}', username '{provider.key_user}'"
         )
     return key
 
@@ -440,7 +470,7 @@ def make_clients(
     for name in roles:
         role, provider = config.role(name)
         if provider.name not in keys:
-            keys[provider.name] = read_key(provider)
+            keys[provider.name] = read_key(provider, config.env_file)
         clients[name] = HostedClient(
             role, provider, ledger, key=keys[provider.name], should_stop=should_stop
         )

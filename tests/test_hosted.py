@@ -263,3 +263,46 @@ def test_the_key_comes_from_the_environment_first_then_keyring(monkeypatch):
 
 def test_kimi_platform_keys_use_the_documented_endpoint():
     assert CONFIG.providers["kimi"].base_url == "https://api.moonshot.ai/v1"
+
+
+def test_keys_come_from_the_env_file_after_the_environment_and_before_keyring(
+    monkeypatch, tmp_path
+):
+    import os
+
+    import keyring
+
+    from emperor.data.hosted import read_key
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        '# keys\nexport Deepseek_API_Key="ds-from-file"\nKimi_API_Key = kimi-from-file\n',
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("Deepseek_API_Key", raising=False)
+    monkeypatch.delenv("Kimi_API_Key", raising=False)
+    monkeypatch.setattr(keyring, "get_password", lambda service, user: "from-keyring")
+    assert read_key(CONFIG.providers["deepseek"], env_file) == "ds-from-file"
+    assert read_key(CONFIG.providers["kimi"], env_file) == "kimi-from-file"
+    assert "Deepseek_API_Key" not in os.environ  # read, never exported to child processes
+    monkeypatch.setenv("Deepseek_API_Key", "ds-from-env")
+    assert read_key(CONFIG.providers["deepseek"], env_file) == "ds-from-env"
+    env_file.write_text("Kimi_API_Key=\n", encoding="utf-8")  # empty: falls through
+    assert read_key(CONFIG.providers["kimi"], env_file) == "from-keyring"
+
+
+def test_a_missing_key_names_the_variable_and_the_file(monkeypatch, tmp_path):
+    import keyring
+
+    from emperor.data.hosted import read_key
+
+    monkeypatch.delenv("Kimi_API_Key", raising=False)
+    monkeypatch.setattr(keyring, "get_password", lambda service, user: None)
+    with pytest.raises(TeacherSetupError) as error:
+        read_key(CONFIG.providers["kimi"], tmp_path / "missing.env")
+    assert "Kimi_API_Key" in str(error.value) and "missing.env" in str(error.value)
+
+
+def test_the_config_points_at_the_user_env_file():
+    assert CONFIG.env_file is not None and CONFIG.env_file.name == ".env"
+    assert CONFIG.env_file.parent.name == ".emperor"

@@ -1,8 +1,12 @@
 # Hosted teacher, tool simulator and judge for `uv run --group data --group hosted hosted ...`.
 #
-# API keys are never stored here. At run time each provider's key is read from the environment
-# variable `key_env` if it is set, otherwise from the OS credential store with `keyring`
-# (Windows Credential Manager), service `key_service`, username `key_user`.
+# API keys are never stored here. At run time each provider's key comes from the first of: the
+# process environment variable `key_env`; the same name in `[keys] env_file` (KEY=VALUE lines,
+# read by this process only, never exported); the OS credential store via `keyring` (service
+# `key_service`, username `key_user`).
+
+[keys]
+env_file = "~/.emperor/.env"
 #
 # Rates are USD per million tokens at the standard (peak) price, checked on 2026-11-13 against
 # the pages in `rates_source`. Update them when the provider changes its prices; the spend

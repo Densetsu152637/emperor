@@ -15,3 +15,8 @@ build/
 *.gguf
 *.safetensors
 /tools/
+
+# API keys live outside the repository (~/.emperor/.env); never commit a copy.
+.env
+.env.*
+!.env.example

@@ -54,10 +54,12 @@ API is used to generate or judge data either way. Training always runs on this m
 - **Tool simulator**: `deepseek-flash` without thinking (its output is context, never trained).
 - **Judge**: `kimi-k3.1-pro` (always thinks; a different family from the teacher). It sees
   the transcript without the teacher's reasoning. Thresholds and rubric are the local ones.
-- **Keys**: read at run time from the environment variables `Deepseek_API_Key` and
-  `Kimi_API_Key` (a Kimi Open Platform key from platform.kimi.ai), or, when a variable is not
-  set, from the OS credential store with `keyring` (service `emperor`, usernames `deepseek` and
-  `moonshot`). Never in files, logs or the command line:
+- **Keys**: `Deepseek_API_Key` and `Kimi_API_Key` (a Kimi Open Platform key from
+  platform.kimi.ai), read at run time from the first of: the process environment;
+  `~/.emperor/.env` (`KEY=VALUE` lines outside every repository; `[keys] env_file` in the
+  config; read by the runner only, never exported to child processes); the OS credential store
+  with `keyring` (service `emperor`, usernames `deepseek` and `moonshot`). Never in the repo,
+  logs or the command line. A keyring entry can be added with:
 
   ```powershell
   uv run python -c "import keyring, getpass; keyring.set_password('emperor', 'deepseek', getpass.getpass())"
