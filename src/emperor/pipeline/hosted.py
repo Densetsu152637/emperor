@@ -476,6 +476,13 @@ def build_parser(prog: str = "hosted") -> argparse.ArgumentParser:
     )
     parser.add_argument("--detach", action="store_true", help="run in the background")
     parser.add_argument(
+        "--budget",
+        action="append",
+        default=[],
+        metavar="PROVIDER=USD",
+        help="override a provider's budget_usd for this run (repeatable)",
+    )
+    parser.add_argument(
         "--outage-waits",
         type=int,
         default=-1,
@@ -499,6 +506,11 @@ def build_parser(prog: str = "hosted") -> argparse.ArgumentParser:
 
 def configure(args) -> HostedConfig:
     config = load_config(args.root / args.config if not args.config.is_absolute() else args.config)
+    for item in getattr(args, "budget", []):
+        name, _, usd = item.partition("=")
+        if name not in config.providers:
+            raise SystemExit(f"--budget: unknown provider {name!r}")
+        config.providers[name].budget_usd = float(usd)
     for provider in config.providers.values():
         if args.offpeak_only and provider.offpeak_factor < 1.0:
             provider.offpeak_only = True

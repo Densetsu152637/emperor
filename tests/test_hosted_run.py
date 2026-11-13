@@ -257,3 +257,13 @@ def test_a_provider_outage_is_waited_out_and_the_phase_resumed(tmp_path):
     calls.clear()
     args.outage_waits = 0
     assert run.run_phase("judge")["stopped"]  # no waits allowed: the run stops, resumable
+
+
+def test_budgets_can_be_set_per_run():
+    args = hosted.build_parser().parse_args(
+        ["--config", str(ROOT / "configs" / "hosted.toml"), "--budget", "deepseek=120",
+         "--budget", "kimi=40"]
+    )  # fmt: skip
+    config = hosted.configure(args)
+    assert config.providers["deepseek"].budget_usd == 120.0
+    assert config.providers["kimi"].budget_usd == 40.0

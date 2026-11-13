@@ -108,6 +108,21 @@ in `data/`; the dataset goes to a private Hugging Face repository (`<org>/empero
    vendored schemas, 0 secret-pattern hits, and clean dedup and held-out overlap checks.
 5. **Datasheet.** List every source with its licence and provider terms.
 
+### Full run, end to end (`scripts/full_run.py`)
+
+One detached command builds both models without manual steps: hosted data for Emperor, then
+Consul (2,000 tasks each, resuming from the pilot data, DeepSeek off-peak only, outages and
+budget caps paused and resumed), then filter, train, merge, export (bf16 and GGUF), eval and
+card for Emperor and then Consul, one model at a time on the GPU and only while the user is
+idle. Training takes its length from the data (p99, at most 32K) with activations offloaded to
+RAM. Nothing is published.
+
+```powershell
+python scripts/full_run.py start --deepseek-budget 150 --kimi-budget 60
+python scripts/full_run.py status     # runs/full/status.json
+python scripts/full_run.py stop       # then `start` again to resume
+```
+
 ### Full run on hosted models (the default)
 
 Teacher and simulator on DeepSeek, judge on Kimi (`configs/hosted.toml`); nothing runs on the
