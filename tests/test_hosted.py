@@ -308,3 +308,42 @@ def test_a_missing_key_names_the_variable_and_the_file(monkeypatch, tmp_path):
 def test_the_config_points_at_the_user_env_file():
     assert CONFIG.env_file is not None and CONFIG.env_file.name == ".env"
     assert CONFIG.env_file.parent.name == ".emperor"
+
+
+def test_the_peak_window_in_utc_including_weekends_and_other_time_zones():
+    from datetime import timedelta, timezone
+
+    deepseek = CONFIG.providers["deepseek"]
+    assert deepseek.offpeak_only  # the default: teacher and simulator wait for off-peak
+    friday = datetime(2026, 11, 13, tzinfo=UTC)  # a Friday
+    peak_hours = [h for h in range(24) if deepseek.is_peak(friday.replace(hour=h))]
+    assert peak_hours == [1, 2, 3, 6, 7, 8, 9]
+    saturday, sunday = friday + timedelta(days=1), friday + timedelta(days=2)
+    assert not any(deepseek.is_peak(day.replace(hour=h)) for day in (saturday, sunday)
+                   for h in range(24))  # fmt: skip
+    # 12:30 in Sydney (UTC+11) on Friday is 01:30 UTC: peak.
+    sydney = timezone(timedelta(hours=11))
+    assert deepseek.is_peak(datetime(2026, 11, 13, 12, 30, tzinfo=sydney))
+    # 10:30 on Monday in Sydney is 23:30 UTC on Sunday: off-peak.
+    assert not deepseek.is_peak(datetime(2026, 11, 16, 10, 30, tzinfo=sydney))
+    # The window reopens on the hour.
+    assert deepseek.next_offpeak(friday.replace(hour=2, minute=17)) == friday.replace(hour=4)
+    assert deepseek.next_offpeak(friday.replace(hour=7)) == friday.replace(hour=10)
+    noon = friday.replace(hour=12, minute=5)
+    assert deepseek.next_offpeak(noon) == noon
+    assert not CONFIG.providers["kimi"].offpeak_only  # the judge has no off-peak price
+
+
+def test_a_peak_request_waits_and_reports_when_it_resumes():
+    times = iter([PEAK, PEAK, PEAK, OFFPEAK, OFFPEAK])
+    seen = []
+
+    def sleep(seconds):
+        seen.append(teacher.waiting_until)
+
+    r, p = CONFIG.role("teacher")
+    teacher = HostedClient(r, p, Ledger(None), key=KEY, http=Http([ok()]), sleep=sleep,
+                           clock=lambda: next(times))  # fmt: skip
+    teacher.chat([{"role": "user", "content": "x"}])
+    assert seen and all(t == PEAK.replace(hour=4) for t in seen)
+    assert teacher.waiting_until is None

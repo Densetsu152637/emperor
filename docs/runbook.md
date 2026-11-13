@@ -123,8 +123,11 @@ GPU, so the idle gate does not apply. Training still waits for an idle machine.
 
 2. Check the rates and budgets in `configs/hosted.toml` against the provider pages it cites,
    and set `budget_usd` per provider to what the account may spend on this run.
-3. Emperor's data, from the emperor checkout (`--offpeak-only` halves DeepSeek's price and
-   stretches the run over the off-peak hours):
+3. Emperor's data, from the emperor checkout. Rule: DeepSeek generation runs only in its
+   discounted off-peak hours (outside 01:00-04:00 and 06:00-10:00 UTC on weekdays; all of the
+   weekend). This is the default: at peak the run lets requests in flight finish, starts no
+   new DeepSeek call and resumes on its own (`status.json`: phase `waiting_offpeak`,
+   `resume_at_utc`). Never pass `--allow-peak` for the full run.
 
    ```powershell
    uv run hosted --data-dir data/hosted-1 --run-dir runs/hosted-1 --detach

@@ -33,7 +33,7 @@ import time
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -99,6 +99,15 @@ class Provider:
 
     def price_factor(self, when: datetime) -> float:
         return 1.0 if self.is_peak(when) else self.offpeak_factor
+
+    def next_offpeak(self, when: datetime) -> datetime:
+        """The first moment at or after `when` (UTC) that is off-peak."""
+        when = when.astimezone(UTC)
+        for _ in range(24 * 8):  # peak windows are whole hours; a week covers every case
+            if not self.is_peak(when):
+                return when
+            when = when.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        raise ValueError(f"{self.name}: no off-peak hour in a week")
 
 
 @dataclass
@@ -330,6 +339,7 @@ class HostedClient:
         self.base_url = provider.base_url.rstrip("/")
         self.template_kwargs = {"enable_thinking": bool(role.thinking or role.reasoning_effort)}
         self.served_model: str | None = None
+        self.waiting_until: datetime | None = None  # set while held back for off-peak hours
         self._sleep = sleep
         self._clock = clock
         self._should_stop = should_stop
@@ -379,10 +389,19 @@ class HostedClient:
         return body
 
     def _wait_for_offpeak(self) -> None:
-        while self.provider.offpeak_only and self.provider.is_peak(self._clock()):
-            if self._should_stop():
-                raise TeacherError(f"{self.provider.name}: stopped while waiting for off-peak")
-            self._sleep(60)
+        """Hold a new request back during peak hours. Requests already sent finish; this one
+        goes out when the off-peak window opens."""
+        try:
+            while self.provider.offpeak_only:
+                now = self._clock()
+                if not self.provider.is_peak(now):
+                    break
+                self.waiting_until = self.provider.next_offpeak(now)
+                if self._should_stop():
+                    raise TeacherError(f"{self.provider.name}: stopped while waiting for off-peak")
+                self._sleep(60)
+        finally:
+            self.waiting_until = None
 
     def chat(
         self,

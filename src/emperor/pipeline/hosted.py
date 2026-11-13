@@ -152,11 +152,14 @@ class HostedRun:
             counts["main"]["generation_rejects"].values()
         )
         usd_per_task = usd / tasks_done if tasks_done else None
+        waiting = [w for c in self.clients.values() if (w := getattr(c, "waiting_until", None))]
         status = {
             "updated": datetime.now().isoformat(timespec="seconds"),
             "model": self.name,
             "state": state,
-            "phase": self.phase,
+            # Every new DeepSeek call is held back for the off-peak window.
+            "phase": "waiting_offpeak" if waiting else self.phase,
+            "resume_at_utc": min(waiting).isoformat(timespec="minutes") if waiting else None,
             "pid": os.getpid(),
             "run_dir": str(self.run_dir),
             "data_dir": str(self.data_dir),
@@ -429,7 +432,9 @@ def build_parser(prog: str = "hosted") -> argparse.ArgumentParser:
         "--offpeak-only", action="store_true", help="send DeepSeek requests only off-peak"
     )
     hours.add_argument(
-        "--any-hour", action="store_true", help="ignore offpeak_only in the config (pilots)"
+        "--allow-peak",
+        action="store_true",
+        help="also send DeepSeek requests in peak hours (the default waits for off-peak)",
     )
     parser.add_argument(
         "--only", action="append", default=[], help="run just this phase (repeatable)"
@@ -455,7 +460,7 @@ def configure(args) -> HostedConfig:
     for provider in config.providers.values():
         if args.offpeak_only and provider.offpeak_factor < 1.0:
             provider.offpeak_only = True
-        if args.any_hour:
+        if args.allow_peak:
             provider.offpeak_only = False
     return config
 

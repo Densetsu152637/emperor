@@ -67,8 +67,13 @@ API is used to generate or judge data either way. Training always runs on this m
 
 - **Config**: `configs/hosted.toml` holds the base URLs, model ids, per-role thinking and token
   budgets, concurrency, the price per million tokens (with the source page) and a hard budget
-  per provider. `--offpeak-only` (or `offpeak_only = true`) sends DeepSeek requests only in its
-  half-price hours (outside 01:00-04:00 and 06:00-10:00 UTC on weekdays).
+  per provider.
+- **Off-peak only (rule)**: DeepSeek calls (teacher and simulator) are sent only in DeepSeek's
+  half-price hours, everything outside 01:00-04:00 and 06:00-10:00 UTC Monday to Friday
+  (weekends are off-peak all day). At a peak boundary the requests already sent finish, no new
+  DeepSeek call starts, and the run resumes by itself when the window opens; `status.json`
+  shows phase `waiting_offpeak` and `resume_at_utc`. Running in peak hours needs the explicit
+  `--allow-peak` flag. The Kimi judge has no off-peak price and is not held back.
 
 ```powershell
 uv run hosted --data-dir data/hosted-1 --run-dir runs/hosted-1 --detach   # start or resume

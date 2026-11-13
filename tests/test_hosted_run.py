@@ -200,3 +200,38 @@ def test_changed_judge_settings_rejudge_pilot_samples_without_the_teacher(tmp_pa
     assert len(judged) == 4  # two verdicts per pilot sample; the latest counts
     final = list(iter_records(tmp_path / "data" / "final"))
     assert len(final) == 2
+
+
+def test_status_shows_the_off_peak_wait_and_when_it_ends(tmp_path):
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    args = hosted.build_parser().parse_args(
+        [
+            "--root",
+            str(tmp_path),
+            "--config",
+            str(ROOT / "configs" / "hosted.toml"),
+            "--data-dir",
+            "data",
+            "--run-dir",
+            "runs/r1",
+        ]  # fmt: skip
+    )
+    run = hosted.HostedRun(args, hosted.configure(args))
+    resume = datetime(2026, 11, 13, 10, 0, tzinfo=UTC)
+    run.clients = {"teacher": SimpleNamespace(waiting_until=resume)}
+    run.phase = "generate"
+    run.write_status("running")
+    status = json.loads((tmp_path / "runs" / "r1" / "status.json").read_text(encoding="utf-8"))
+    assert status["phase"] == "waiting_offpeak"
+    assert status["resume_at_utc"] == "2026-11-13T10:00+00:00"
+
+
+def test_peak_hours_need_an_explicit_flag():
+    args = hosted.build_parser().parse_args(["--config", str(ROOT / "configs" / "hosted.toml")])
+    assert hosted.configure(args).providers["deepseek"].offpeak_only
+    args = hosted.build_parser().parse_args(
+        ["--config", str(ROOT / "configs" / "hosted.toml"), "--allow-peak"]
+    )
+    assert not hosted.configure(args).providers["deepseek"].offpeak_only
