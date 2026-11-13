@@ -8,6 +8,7 @@ the teacher's reasoning for it as `reasoning_content` (the contract shared with 
 
 import copy
 import json
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -34,6 +35,8 @@ from emperor.eval.contract import (
     prompt,
     system_prompt,
 )
+
+log = logging.getLogger("emperor.data.generate")
 
 
 class Chat(Protocol):
@@ -455,7 +458,9 @@ def generate_trace(
             message["tool_calls"] = calls
         # The teacher keeps its own reasoning for this task's earlier turns, as gpt-oss expects
         # across tool calls and as the student will see it; the stored sample keeps it too.
-        teacher_messages.append(with_reasoning(message, reasoning, TEACHER_REASONING_FIELD))
+        # The field is sent even when empty: DeepSeek's thinking mode rejects a tool-calling
+        # request whose earlier assistant turns lack `reasoning_content` (HTTP 400, pilot 1).
+        teacher_messages.append({**message, TEACHER_REASONING_FIELD: reasoning})
         stored.append(with_reasoning(message, reasoning))
         if not calls:
             break
@@ -531,8 +536,10 @@ def _sample_with_retries(
             sample, reason = generate_trace(record, teacher, env_client, config, attempt=attempt)
         except TeacherContextError:  # the trace outgrew the server's context or KV cache
             sample, reason = None, "context_exceeded"
-        except TeacherOutputError:
+        except TeacherOutputError as error:
             sample, reason = None, "teacher_output_unparsable"
+            # What the server said, for diagnosis (a hosted 400 names the bad field).
+            log.warning("%s: teacher output rejected: %s", record.id, str(error)[:300])
         except TeacherError:
             raise
         except Exception as error:  # one bad sample must not end an overnight run
