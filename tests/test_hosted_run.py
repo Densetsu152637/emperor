@@ -235,3 +235,25 @@ def test_peak_hours_need_an_explicit_flag():
         ["--config", str(ROOT / "configs" / "hosted.toml"), "--allow-peak"]
     )
     assert not hosted.configure(args).providers["deepseek"].offpeak_only
+
+
+def test_a_provider_outage_is_waited_out_and_the_phase_resumed(tmp_path):
+    args = hosted.build_parser().parse_args(
+        ["--root", str(tmp_path), "--config", str(ROOT / "configs" / "hosted.toml"),
+         "--data-dir", "data", "--run-dir", "runs/r1", "--outage-waits", "2"]
+    )  # fmt: skip
+    run = hosted.HostedRun(args, hosted.configure(args))
+    run._sleep = lambda s: None
+    calls = []
+
+    def phase_judge():
+        calls.append(1)
+        if len(calls) < 3:
+            return {"stopped": True, "error": "kimi: no answer after 30 tries (HTTP 429)"}
+        return {"stopped": False, "judged": 5}
+
+    run.phase_judge = phase_judge
+    assert run.run_phase("judge") == {"stopped": False, "judged": 5} and len(calls) == 3
+    calls.clear()
+    args.outage_waits = 0
+    assert run.run_phase("judge")["stopped"]  # no waits allowed: the run stops, resumable

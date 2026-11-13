@@ -47,6 +47,7 @@ log = logging.getLogger("emperor.hosted")
 # offload to RAM. Two too-long pilot traces measured 8.7K and 9.7K tokens without the old 8,192
 # cap; 16,384 keeps them with room, and still rejects a runaway trace.
 MAX_SAMPLE_TOKENS = 16384
+OUTAGE_WAIT = 900  # seconds between tries of a phase whose provider stopped answering
 STATUS_SECONDS = 30.0
 
 
@@ -110,6 +111,7 @@ class HostedRun:
         self.state: dict = {"phases": {}}
         self.started = time.time()
         self.progress: list[tuple[float, int, float]] = []  # (time, items done, usd)
+        self._sleep = time.sleep
 
     # -- plumbing ------------------------------------------------------------------------------
 
@@ -118,12 +120,35 @@ class HostedRun:
 
     def client(self, role: str) -> HostedClient:
         if role not in self.clients:
-            self.clients.update(
-                make_clients(self.config, self.ledger, (role,), should_stop=self.should_stop)
-            )
-            self.names[role] = ping(self.clients[role])
+            made = make_clients(self.config, self.ledger, (role,), should_stop=self.should_stop)
+            self.names[role] = ping(made[role])  # kept only once the provider has answered
+            self.clients.update(made)
             log.info("%s: %s", role, self.names[role])
         return self.clients[role]
+
+    def run_phase(self, name: str) -> dict:
+        """One phase; a provider outage (no answer after every retry, as when Kimi answered
+        "engine overloaded" for over an hour in hosted pilot 4) is waited out and the phase
+        resumed, up to `--outage-waits` times, instead of ending the run."""
+        waits = 0
+        while True:
+            try:
+                result = getattr(self, f"phase_{name}")()
+            except TeacherSetupError:
+                raise
+            except TeacherError as error:
+                result = {"stopped": True, "error": str(error)}
+            outage = "no answer after" in str(result.get("error", ""))
+            if not (result.get("stopped") and outage) or waits >= self.args.outage_waits:
+                return result
+            waits += 1
+            self.phase = "waiting_provider"
+            log.warning("%s: %s; waiting %ds (wait %d)", name, result["error"], OUTAGE_WAIT, waits)
+            for _ in range(OUTAGE_WAIT // 10):
+                if self.should_stop():
+                    return result
+                self._sleep(10)
+            self.phase = name
 
     def workers(self, role: str) -> int:
         override = self.args.judge_workers if role == "judge" else self.args.workers
@@ -391,14 +416,12 @@ class HostedRun:
                 self.phase = name
                 log.info("phase %s", name)
                 try:
-                    result = getattr(self, f"phase_{name}")()
+                    result = self.run_phase(name)
                 except TeacherSetupError as error:
                     log.error("%s: %s", name, error)
                     outcome = "failed"
                     self.state["phases"][name] = {"status": "failed", "error": str(error)}
                     break
-                except TeacherError as error:  # budget reached, provider unreachable
-                    result = {"stopped": True, "error": str(error)}
                 stopped = result.get("stopped")
                 status = "stopped" if stopped else "done"
                 self.state["phases"][name] = {"status": status, **result}
@@ -451,6 +474,12 @@ def build_parser(prog: str = "hosted") -> argparse.ArgumentParser:
         "--only", action="append", default=[], help="run just this phase (repeatable)"
     )
     parser.add_argument("--detach", action="store_true", help="run in the background")
+    parser.add_argument(
+        "--outage-waits",
+        type=int,
+        default=12,
+        help="times a phase waits 15 minutes for a provider that stopped answering",
+    )
     pilots = parser.add_argument_group("pilots (they write into the full run's data dir)")
     pilots.add_argument("--pilot", type=int, help="pilot number, recorded with every sample")
     pilots.add_argument(
