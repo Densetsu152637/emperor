@@ -108,6 +108,41 @@ in `data/`; the dataset goes to a private Hugging Face repository (`<org>/empero
    vendored schemas, 0 secret-pattern hits, and clean dedup and held-out overlap checks.
 5. **Datasheet.** List every source with its licence and provider terms.
 
+### Full run: both datasets first, then training
+
+Generate and judge both models' data before any training. Only one model may run at a time
+(teacher, judge, training or eval), and both pipelines serve on port 8081, so **never run two
+pipelines at once**: start the next only after the previous one's summary says it finished.
+The pipeline itself never runs two models together (the teacher stops before the judge starts).
+
+1. Emperor's data, from the emperor checkout (about 2,000 prompts; generation and judging take
+   days and pause whenever the machine is in use):
+
+   ```powershell
+   uv run --group data --group train pipeline --detach --only prompts --only generate `
+     --only judge --only retry --only filter
+   ```
+
+   Wait until `runs/<timestamp>/summary.json` reports `done` (or resume the same run with
+   `--resume runs/<timestamp>` and the same `--only` flags after a stop).
+2. Consul's data, from the consul checkout, the same way (Consul has no retry rounds):
+
+   ```powershell
+   uv run --group data --group train pipeline --detach --only prompts --only generate `
+     --only judge --only filter
+   ```
+
+3. Training, one model at a time and only while the machine is idle: resume each data run with
+   the remaining phases, Emperor first, then Consul once Emperor's summary is `done`:
+
+   ```powershell
+   uv run --group data --group train pipeline --detach --resume runs/<timestamp> `
+     --only train --only merge --only export --only eval --only card
+   ```
+
+`--skip train --skip merge --skip export --skip eval --skip card` also stops after the data,
+but records those phases as skipped; `--only` leaves them untouched for the later resume.
+
 ## Stage 5: supervised fine-tuning (bf16 LoRA)
 
 The plan says QLoRA; per the user, use bf16 LoRA instead and update the plan's stage 5 text
