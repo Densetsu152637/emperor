@@ -10,6 +10,11 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        model: [emperor, consul]
+    name: checks (${{ matrix.model }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -21,4 +26,4 @@ jobs:
           enable-cache: true
       - name: Project checks
         shell: bash
-        run: bash scripts/check.sh
+        run: bash models/${{ matrix.model }}/scripts/check.sh

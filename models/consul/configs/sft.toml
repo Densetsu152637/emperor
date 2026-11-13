@@ -1,0 +1,80 @@
+# Consul supervised fine-tuning: bf16 LoRA on full-precision weights (no QLoRA, no 4/8-bit).
+# Paths are relative to the repository root unless absolute. The base is read-only.
+
+[model]
+base = "F:/AI-Models/Qwen/Qwen3.5-4B"
+attn_implementation = "sdpa"  # flash-attn has no Windows wheel
+
+[data]
+path = "data/final/final.jsonl"
+max_length = 8192  # prompt + teacher reasoning + critique; longer samples are dropped, not cut
+# (Emperor's measurement on Qwen3.5-4B with the Triton kernels: 13.0 GiB peak, 4.3 s a step)
+val_fraction = 0.05
+split_seed = 1337
+
+[lora]
+r = 32
+alpha = 64
+dropout = 0.05
+# Qwen3.5: full-attention layers (q/k/v/o), Gated DeltaNet layers (in_proj_qkv, in_proj_z,
+# out_proj; the per-head in_proj_a/in_proj_b gates stay frozen) and every MLP.
+target_modules = [
+  "q_proj", "k_proj", "v_proj", "o_proj",
+  "in_proj_qkv", "in_proj_z", "out_proj",
+  "gate_proj", "up_proj", "down_proj",
+]
+
+[train]
+output_dir = "outputs/sft"
+epochs = 2.0
+learning_rate = 1.0e-4
+lr_scheduler = "cosine"
+warmup_ratio = 0.03
+weight_decay = 0.0
+per_device_batch_size = 1
+gradient_accumulation_steps = 16
+gradient_checkpointing = true
+save_steps = 50  # a checkpoint every N optimiser steps; training resumes from the last one
+save_total_limit = 3
+eval_steps = 50
+logging_steps = 5
+max_grad_norm = 1.0
+seed = 1337
+
+[merge]
+adapter_dir = "outputs/sft/adapter"
+output_dir = "weights/consul-4b-bf16"
+
+[release]
+name = "consul-4b"  # weights/consul-4b-gguf/, consul-4b-<TYPE>.gguf
+title = "Consul"
+summary = """Consul is an open-weight critic for Imperium. Given a plan, a diff or an agent \
+report, it reasons in a thinking block, then returns ranked findings (location, impact, \
+confidence, fix or check) and a verdict as one JSON object in a strict result schema."""
+eval_alias = "consul"
+tags = ["imperium", "critic", "code-review", "lora", "qwen3", "reasoning"]
+gguf_types = ["Q8_0", "Q6_K", "Q4_K_M"]
+context_tokens = 32768
+intended_use = [
+  "Reviewing a plan, a diff or an agent report inside Imperium's critic loop and returning a structured verdict.",
+  "Running on the CPU lane (a quantised GGUF) while the GPU serves another model.",
+]
+limits = [
+  "A 4B model: findings are heuristics and need the author's triage, not blind trust.",
+  "Trained and scored on synthetic artifacts with seeded defects; real-world recall is untested.",
+  "It cites only the sources it is given and cannot search the web by itself in this version.",
+  "Delta-review loops (goal C4) are not yet trained or evaluated.",
+]
+# Used only when the dataset report does not name them (the card reads them from the samples).
+teacher = "deepseek-v4-pro"
+teacher_licence = "DeepSeek Open Platform Terms of Service"
+teacher_policy = "DeepSeek's outputs are used under section 4.2 of the DeepSeek Open Platform Terms of Service, which assigns the outputs to the user and lists \"training other models (such as model distillation)\" among the permitted uses (https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html)."
+judge = "kimi-k3.1-pro (Moonshot API, another model family than the teacher; 1-5 on five criteria), plus a deterministic ground-truth check"
+filters = [
+  "the teacher's reasoning is present; it is trained as the model's thinking, the judge sees only the critique",
+  "output parses and validates against the critique schema",
+  "every cited URL appears in the task's provided sources",
+  "all seeded acceptance-changing defects found and no false blocking findings",
+  "judge pass and a mean score of at least 4.0",
+  "held-out tasks come from another seed range and vocabulary and are checked for overlap",
+]

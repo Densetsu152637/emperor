@@ -1,0 +1,105 @@
+# Hosted teacher, tool simulator and judge for `uv run hosted ...`; the same keys and models
+# as Emperor (the simulator is unused: critiques make no tool calls).
+#
+# API keys are never stored here. At run time each provider's key comes from the first of: the
+# process environment variable `key_env`; the same name in `[keys] env_file` (KEY=VALUE lines,
+# read by this process only, never exported); the OS credential store via `keyring` (service
+# `key_service`, username `key_user`).
+
+[keys]
+env_file = "~/.emperor/.env"
+#
+# Rates are USD per million tokens at the standard (peak) price, checked on 2026-11-13 against
+# the pages in `rates_source`. Update them when the provider changes its prices; the spend
+# estimate in the status file and the budget caps use them.
+
+[providers.deepseek]
+base_url = "https://api.deepseek.com"
+key_env = "Deepseek_API_Key"
+key_service = "emperor"
+key_user = "deepseek"
+budget_usd = 25.0  # hard cap: the run stops (resumable) when the estimate reaches it
+max_concurrency = 16  # account limits: 500 concurrent for deepseek-v4-pro, 2500 for flash
+rates_source = "https://api-docs.deepseek.com/quick_start/pricing"
+# "Off-peak rates are half of the peak rates. Peak hours are 01:00 - 04:00 and 06:00 - 10:00
+# UTC, Monday through Friday, excluding Chinese public holidays." (holidays are not modelled,
+# so the estimate errs high on them).
+peak_hours_utc = [[1, 4], [6, 10]]
+peak_weekdays_only = true
+offpeak_factor = 0.5
+# Wait for off-peak hours before every DeepSeek request: half the price, and peak is 35 of
+# 168 hours a week, so the run takes at most about 1.3 times as long (`--any-hour` overrides).
+offpeak_only = true
+thinking_param = true
+# "required and named tool choices are not supported in thinking mode; the API returns a 400
+# error." (https://api-docs.deepseek.com/api/create-chat-completion)
+required_tool_choice_when_thinking = false
+
+[providers.deepseek.rates.deepseek-v4-pro]  # DeepSeek-V4-Pro-0813
+input_miss = 1.32
+input_hit = 0.044
+output = 3.96
+
+[providers.deepseek.rates.deepseek-flash]  # DeepSeek-V4.1-Flash-1017, the cheapest current Flash
+input_miss = 0.30
+input_hit = 0.006
+output = 1.20
+
+[providers.kimi]
+# Keys from the Kimi Open Platform (platform.kimi.ai) use this endpoint for the OpenAI-compatible
+# Chat Completions API (https://platform.kimi.ai/docs/api/overview); accounts and keys there
+# are isolated from other regional Kimi platforms (https://platform.kimi.ai/docs/guide/troubleshooting).
+base_url = "https://api.moonshot.ai/v1"
+key_env = "Kimi_API_Key"
+key_service = "emperor"
+key_user = "moonshot"
+budget_usd = 25.0
+# Tier by cumulative top-up (https://platform.kimi.ai/docs/pricing/limits): $20+ is Tier2,
+# 40 concurrent requests, 100 RPM, 3M TPM.
+max_concurrency = 8
+# "engine_overloaded_error" (HTTP 429) came in bursts of several minutes in hosted pilot 3; the
+# run waits them out (up to about an hour) instead of stopping.
+max_retries = 30
+rates_source = "https://platform.kimi.ai/docs/pricing/chat"
+# K3 series: temperature, top_p, n and the penalties are fixed; passing them is an error
+# (https://platform.kimi.ai/docs/api/models-overview).
+fixed_sampling = true
+
+[providers.kimi.rates."kimi-k3.1-pro"]
+input_miss = 2.00
+input_hit = 0.20
+output = 10.00
+cache_write = 2.00  # the default 5-minute cache tier
+
+[providers.kimi.rates."kimi-k3.1-pro-highspeed"]  # the same model, served faster
+input_miss = 4.00
+input_hit = 0.20
+output = 20.00
+cache_write = 4.00
+
+[roles.teacher]
+provider = "deepseek"
+model = "deepseek-v4-pro"
+thinking = true
+reasoning_effort = "low"  # hosted pilot 2: 500-token reasoning, critiques under 3.1K tokens (high: one over 8,192)
+max_tokens = 16384  # reasoning plus the reply
+
+[roles.simulator]
+provider = "deepseek"
+model = "deepseek-flash"
+thinking = false  # its output is tool-result context, never trained on
+
+[roles.judge]
+provider = "kimi"
+model = "kimi-k3.1-pro"  # always thinks; effort is the only switch
+# Low effort: its keep/reject verdicts matched high effort on 19 of 20 pilot samples (95%, over
+# the 85% rule) at about half the judge cost.
+reasoning_effort = "low"
+max_tokens = 16384
+# kimi-k3.1-pro answered 429 engine_overloaded for over an hour in hosted pilot 4 while its
+# high-speed variant answered: the same model, so verdicts stay comparable. After 3 quick
+# tries the judge uses it for 15 minutes, then tries the primary again; every verdict records
+# the model that gave it.
+fallback_models = ["kimi-k3.1-pro-highspeed"]
+overload_tries = 3
+fallback_cooldown_seconds = 900
