@@ -25,6 +25,12 @@ class DataConfig:
     path: str = "data/final/final.jsonl"
     extra_paths: list[str] = field(default_factory=list)  # more rounds, merged and deduped by id
     max_length: int = 8192
+    # From the data instead: the `max_length_quantile` of the samples' token lengths, rounded
+    # up to a multiple of 1,024 and never above `max_length_cap` (long multi-subagent traces are
+    # kept; a runaway one is not). Needs train.offload_activations past what the GPU holds.
+    max_length_auto: bool = False
+    max_length_quantile: float = 0.99
+    max_length_cap: int = 32768
     val_fraction: float = 0.05
     split_seed: int = 1337
 

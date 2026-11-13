@@ -15,6 +15,7 @@ from emperor.train.data import (
     encode_sample,
     load_combined,
     pad_batch,
+    pick_max_length,
     renders_thinking,
     split_records,
 )
@@ -143,6 +144,22 @@ def prepare_datasets(config: SftConfig, tokenizer, root: Path):
     records = load_combined(paths)
     train, val = split_records(records, config.data.val_fraction, config.data.split_seed)
     thinking = base_thinks(tokenizer)
+    if config.data.max_length_auto:
+        lengths = []
+        for sample in records:
+            row, _ = encode_sample(sample, tokenizer, config.data.max_length_cap, thinking=thinking)
+            if row is not None:
+                lengths.append(len(row["input_ids"]))
+        config.data.max_length = pick_max_length(
+            lengths, config.data.max_length_quantile, config.data.max_length_cap
+        )
+        log.info(
+            "training length %d tokens: the %.0f%% quantile of %d samples (cap %d)",
+            config.data.max_length,
+            config.data.max_length_quantile * 100,
+            len(lengths),
+            config.data.max_length_cap,
+        )
     log.info(
         "base is a %s model%s",
         "thinking" if thinking else "non-thinking",

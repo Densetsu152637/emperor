@@ -13,6 +13,7 @@ skipped when any of them has no reasoning: it would teach the model to answer wi
 
 import hashlib
 import json
+import math
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -191,6 +192,19 @@ def reasoning_spans(
             raise TemplateError(f"template is not prefix-consistent at message {i}")
         spans.append((len(before), len(through)))
     return full, spans
+
+
+def pick_max_length(
+    lengths: list[int], quantile: float = 0.99, cap: int = 32768, step: int = 1024
+) -> int:
+    """The training length that covers `quantile` of the samples: that length rounded up to
+    a multiple of `step`, at most `cap`."""
+    if not lengths:
+        return min(step, cap)
+    ordered = sorted(lengths)
+    index = min(len(ordered) - 1, max(0, math.ceil(quantile * len(ordered)) - 1))
+    covered = ordered[index]
+    return min(cap, -(-covered // step) * step)
 
 
 def encode_sample(

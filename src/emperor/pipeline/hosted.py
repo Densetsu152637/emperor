@@ -129,7 +129,7 @@ class HostedRun:
     def run_phase(self, name: str) -> dict:
         """One phase; a provider outage (no answer after every retry, as when Kimi answered
         "engine overloaded" for over an hour in hosted pilot 4) is waited out and the phase
-        resumed, up to `--outage-waits` times, instead of ending the run."""
+        resumed (by default for as long as it takes) instead of ending the run."""
         waits = 0
         while True:
             try:
@@ -139,7 +139,8 @@ class HostedRun:
             except TeacherError as error:
                 result = {"stopped": True, "error": str(error)}
             outage = "no answer after" in str(result.get("error", ""))
-            if not (result.get("stopped") and outage) or waits >= self.args.outage_waits:
+            limit = self.args.outage_waits
+            if not (result.get("stopped") and outage) or (limit >= 0 and waits >= limit):
                 return result
             waits += 1
             self.phase = "waiting_provider"
@@ -477,8 +478,9 @@ def build_parser(prog: str = "hosted") -> argparse.ArgumentParser:
     parser.add_argument(
         "--outage-waits",
         type=int,
-        default=12,
-        help="times a phase waits 15 minutes for a provider that stopped answering",
+        default=-1,
+        help="times a phase waits 15 minutes for a provider that stopped answering "
+        "(default -1: it never gives the phase up)",
     )
     pilots = parser.add_argument_group("pilots (they write into the full run's data dir)")
     pilots.add_argument("--pilot", type=int, help="pilot number, recorded with every sample")
