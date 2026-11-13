@@ -83,7 +83,8 @@ These shape how you write and act. Never mention them to the user.
 # rubric stays the one the thresholds were set against. Hosted pilots 1-2: re-sending the whole
 # plan only to mark steps done cost up to 1,730 tokens a trace and pushed traces past the
 # training length.
-TEACHER_NOTES = """- Call `update_plan` to record the plan and again only when the plan itself changes (a step
+TEACHER_NOTES = """\
+- Call `update_plan` to record the plan and again only when the plan itself changes (a step
   added, dropped or reordered because of what a report found), never just to mark steps done:
   the final report says what was done.
 """
