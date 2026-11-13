@@ -108,7 +108,61 @@ in `data/`; the dataset goes to a private Hugging Face repository (`<org>/empero
    vendored schemas, 0 secret-pattern hits, and clean dedup and held-out overlap checks.
 5. **Datasheet.** List every source with its licence and provider terms.
 
-### Full run: both datasets first, then training
+### Full run, end to end (`scripts/full_run.py`)
+
+One detached command builds both models without manual steps: hosted data for Emperor, then
+Consul (2,000 tasks each, resuming from the pilot data, DeepSeek off-peak only, outages and
+budget caps paused and resumed), then filter, train, merge, export (bf16 and GGUF), eval and
+card for Emperor and then Consul, one model at a time on the GPU and only while the user is
+idle. Training takes its length from the data (p99, at most 32K) with activations offloaded to
+RAM. Nothing is published. Budgets are one pool per provider for both models, in
+`runs/full/budgets.json` (DeepSeek $95, Kimi $37 by default); a stage paused on its cap goes
+on within 30 minutes of the pool being raised there.
+
+```powershell
+python scripts/full_run.py start
+python scripts/full_run.py status     # runs/full/status.json
+python scripts/full_run.py stop       # then `start` again to resume
+```
+
+### Full run on hosted models (the default)
+
+Teacher and simulator on DeepSeek, judge on Kimi (`configs/hosted.toml`); nothing runs on the
+GPU, so the idle gate does not apply. Training still waits for an idle machine.
+
+1. Put the keys in `~/.emperor/.env` (`Deepseek_API_Key=...` and `Kimi_API_Key=...`), or in
+   the environment or keyring, and check they resolve (prints the provider and found, never
+   the value; a missing key raises an error naming the variable and the file):
+
+   ```powershell
+   uv run python -c "from emperor.data.hosted import load_config, read_key; c = load_config(); [print(n, bool(read_key(p, c.env_file))) for n, p in c.providers.items()]"
+   ```
+
+2. Check the rates and budgets in `configs/hosted.toml` against the provider pages it cites,
+   and set `budget_usd` per provider to what the account may spend on this run.
+3. Emperor's data, from the emperor checkout. Rule: DeepSeek generation runs only in its
+   discounted off-peak hours (outside 01:00-04:00 and 06:00-10:00 UTC on weekdays; all of the
+   weekend). This is the default: at peak the run lets requests in flight finish, starts no
+   new DeepSeek call and resumes on its own (`status.json`: phase `waiting_offpeak`,
+   `resume_at_utc`). Never pass `--allow-peak` for the full run.
+
+   ```powershell
+   uv run hosted --data-dir data/hosted-1 --run-dir runs/hosted-1 --detach
+   ```
+
+4. Consul's data, from the consul checkout, the same command. The two use different accounts'
+   rate limits only through the shared keys, so they may run together; run them one after the
+   other when the budget is tight.
+5. Watch `runs/hosted-1/status.json` (spend per provider, dollars per task, projection). On
+   status `budget`, raise `budget_usd` and run the same command to resume; `New-Item
+   runs/hosted-1/STOP` stops cleanly.
+6. Train each model locally, one at a time, on the hosted data: set `[data] path =
+   "data/hosted-1/final/final.jsonl"` in `configs/sft.toml`, then run the local pipeline's
+   filter (it records the kept count the train phase checks) and training phases:
+   `uv run --group data --group train pipeline --detach --data-dir data/hosted-1 --only filter
+   --only train --only merge --only export --only eval --only card`.
+
+### Full run on local models (fallback): both datasets first, then training
 
 Generate and judge both models' data before any training. Only one model may run at a time
 (teacher, judge, training or eval), and both pipelines serve on port 8081, so **never run two

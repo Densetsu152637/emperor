@@ -109,11 +109,34 @@ def eval_table(report: dict | None) -> str:
     return "\n".join(rows) + "\n\n" + "\n".join(notes)
 
 
-def datasheet(release, report: dict | None) -> str:
+def _names(counts: dict) -> str:
+    return ", ".join(f"{name} ({n})" for name, n in counts.items())
+
+
+def teacher_lines(release, report: dict | None) -> list[str]:
+    """The teacher and judge as the dataset records them (the models that actually served);
+    the release config's text when no dataset report is available."""
+    report = report or {}
+    teachers, judges = report.get("teachers") or {}, report.get("judges") or {}
+    hosts, licences = report.get("hosts") or {}, report.get("licences") or {}
+    if not teachers:
+        return [
+            f"- Teacher: {release.teacher} ({release.teacher_licence}).",
+            f"- Judge: {release.judge}.",
+        ]
     lines = [
-        f"- Teacher: {release.teacher} ({release.teacher_licence}), run locally; no hosted API "
-        "(Claude, OpenAI or any other) produced or judged any sample.",
-        f"- Judge: {release.judge}.",
+        f"- Teacher: {_names(teachers)}, served by {', '.join(hosts)}; outputs used under "
+        f"{', '.join(licences)}.",
+        f"- Judge: {_names(judges) or 'not recorded'} (a different model family from the "
+        "teacher; scored 1-5 on eight criteria with a pass or fail).",
+    ]
+    if all(host.startswith("local") for host in hosts):
+        lines.append("- No hosted API produced or judged any sample.")
+    return lines
+
+
+def datasheet(release, report: dict | None) -> str:
+    lines = teacher_lines(release, report) + [
         "- Filters: " + "; ".join(release.filters) + ".",
     ]
     if not report:
@@ -239,8 +262,8 @@ def render_card(inputs: CardInputs, kind: str) -> str:
         "",
         "## Licence",
         "",
-        f"{r.license}, the licence of the base model. The teacher's licence ({r.teacher_licence}) "
-        "permits using its outputs for training.",
+        f"{r.license}, the licence of the base model. The teacher's terms ({r.teacher_licence}) "
+        "permit using its outputs for training.",
     ]
     if r.teacher_policy:
         parts.append(r.teacher_policy)

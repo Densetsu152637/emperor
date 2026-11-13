@@ -389,3 +389,17 @@ def test_a_tool_call_is_required_until_work_starts():
     forced = [k.get("tool_choice") for k in teacher.kwargs]
     # Turn 0 (plan) and turn 1 (only a plan so far) are forced; after spawn_agent they are not.
     assert forced == ["required", "required", None, None]
+
+
+def test_every_earlier_teacher_turn_carries_reasoning_content_even_when_empty():
+    script = good_script()
+    script[1] = {**script[1], "reasoning_content": None}  # a turn without reasoning
+    teacher = ScriptedTeacher(script)
+    sample, reason = generate_trace(record(), teacher, FakeEnv())
+    assert reason is None
+    last_request = teacher.seen[-1][0]
+    earlier = [m for m in last_request if m["role"] == "assistant"]
+    assert len(earlier) == 2 and all(TEACHER_REASONING_FIELD in m for m in earlier)
+    assert earlier[1][TEACHER_REASONING_FIELD] == ""
+    stored = [m for m in sample["messages"] if m["role"] == "assistant"]
+    assert "reasoning_content" not in stored[1]  # the training sample keeps none

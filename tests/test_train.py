@@ -298,3 +298,45 @@ def test_fp32_base_tensors_are_found_under_text_model_names(tmp_path):
         )
     }
     assert text_name("model.layers.1.mlp.up_proj.weight") == "model.layers.1.mlp.up_proj.weight"
+
+
+def test_offloading_is_opt_in_and_wraps_the_training_step():
+    from contextlib import contextmanager
+
+    from emperor.train.sft import offloading_trainer
+
+    assert parse_config({}).train.offload_activations is False
+    assert parse_config({"train": {"offload_activations": True}}).train.offload_activations
+
+    entered = []
+
+    class Graph:
+        @staticmethod
+        @contextmanager
+        def save_on_cpu(pin_memory):
+            entered.append(pin_memory)
+            yield
+
+    class Torch:
+        class autograd:
+            graph = Graph
+
+    class Base:
+        def training_step(self, *args, **kwargs):
+            return "loss"
+
+    trainer = offloading_trainer(Base, Torch)()
+    assert trainer.training_step() == "loss" and entered == [True]
+
+
+def test_the_training_length_covers_the_p99_of_the_data_up_to_a_cap():
+    from emperor.train.data import pick_max_length
+
+    lengths = list(range(1000, 11000, 100))  # 100 samples, 1,000 to 10,900 tokens
+    assert pick_max_length(lengths) == 11264  # p99 is 10,800, rounded up to 1,024s
+    assert pick_max_length(lengths, cap=8192) == 8192
+    assert pick_max_length([40000] * 10) == 32768  # a runaway length is capped
+    assert pick_max_length([]) == 1024
+    assert pick_max_length(lengths, quantile=1.0) == 11264  # the longest, 10,900
+    config = parse_config({"data": {"max_length_auto": True}})
+    assert config.data.max_length_cap == 32768 and config.data.max_length_quantile == 1.0

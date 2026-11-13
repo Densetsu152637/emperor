@@ -13,9 +13,11 @@ from emperor.data.generate import (
     ROUND_SEED_STEP,
     SEED_MASK,
 )
-from emperor.data.shards import done_ids, iter_records, read_jsonl
+from emperor.data.records import current
+from emperor.data.shards import read_jsonl
 
 DEFAULT_RETRIES = 2
+NO_RETRY_REASONS = frozenset({"too_long"})
 
 
 def round_dir(data_dir: Path, k: int) -> Path:
@@ -30,8 +32,8 @@ def retry_dirs(data_dir: Path) -> list[Path]:
 
 def kept_ids(directory: Path) -> set[str]:
     return {
-        s["id"]
-        for s in iter_records(directory / "judged")
+        i
+        for i, s in current(directory / "judged").items()
         if s.get("meta", {}).get("judge", {}).get("keep")
     }
 
@@ -41,7 +43,7 @@ def _round_complete(directory: Path) -> bool:
     if not prompts.exists():
         return False
     ids = {r["id"] for r in read_jsonl(prompts)}
-    finished = done_ids(directory / "rejects") | done_ids(directory / "judged")
+    finished = set(current(directory / "rejects")) | set(current(directory / "judged"))
     return ids <= finished
 
 
@@ -62,9 +64,17 @@ def prepare_round(data_dir: Path, k: int) -> int:
     won = set()
     for j in range(k):
         won |= kept_ids(round_dir(data_dir, j))
+    # A prompt whose trace was too long is long by nature (pilots: 30 of 33 extra tries were too
+    # long again); another round would pay for the same rejection.
+    traced = set(current(previous / "traces"))
+    too_long = {
+        i
+        for i, r in current(previous / "rejects").items()
+        if r.get("reason") in NO_RETRY_REASONS and i not in traced  # not a stale reject
+    }
     lines = []
     for record in read_jsonl(previous / "prompts.jsonl"):
-        if record["id"] in won:
+        if record["id"] in won or record["id"] in too_long:
             continue
         record = {**record, "seed": (record["seed"] + ROUND_SEED_STEP) & SEED_MASK}
         lines.append(json.dumps(record, ensure_ascii=False))

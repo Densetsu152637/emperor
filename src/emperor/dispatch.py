@@ -1,5 +1,5 @@
-"""Console-script entry points that let a project built on Emperor take over `eval`, `data`
-and `pipeline`.
+"""Console-script entry points that let a project built on Emperor take over `eval`, `data`,
+`pipeline` and `hosted`.
 
 A project that depends on this package (Consul) installs its own `pipeline`, `eval` and `data`
 scripts, and two packages writing the same script name race at install time. So these entry
@@ -44,3 +44,4 @@ def _entry(name: str, module: str) -> Callable:
 eval_main = _entry("eval", "emperor.eval.cli")
 data_main = _entry("data", "emperor.data.cli")
 pipeline_main = _entry("pipeline", "emperor.pipeline.cli")
+hosted_main = _entry("hosted", "emperor.pipeline.hosted")

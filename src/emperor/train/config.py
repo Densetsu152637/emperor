@@ -25,6 +25,13 @@ class DataConfig:
     path: str = "data/final/final.jsonl"
     extra_paths: list[str] = field(default_factory=list)  # more rounds, merged and deduped by id
     max_length: int = 8192
+    # From the data instead: the `max_length_quantile` of the samples' token lengths (1.0: the
+    # longest), rounded up to a multiple of 1,024 and never above `max_length_cap` (long
+    # multi-subagent traces are kept; a runaway one is not). Needs train.offload_activations
+    # past what the GPU holds.
+    max_length_auto: bool = False
+    max_length_quantile: float = 1.0  # every trace: the long ones are what Emperor learns
+    max_length_cap: int = 32768
     val_fraction: float = 0.05
     split_seed: int = 1337
 
@@ -61,6 +68,12 @@ class TrainConfig:
     per_device_batch_size: int = 1
     gradient_accumulation_steps: int = 16
     gradient_checkpointing: bool = True
+    # Opt-in: keep the activations saved for the backward pass (with checkpointing, each
+    # layer's input) in pinned RAM instead of VRAM, so traces longer than the GPU alone holds
+    # can be trained. bf16 LoRA either way; the weights stay on the GPU. Off: training stops
+    # with a clear error when the VRAM is not free.
+    offload_activations: bool = False
+    offload_min_free_vram_gib: float = 10.0  # weights, LoRA, optimiser and one layer's work
     save_steps: int = 50
     save_total_limit: int = 3
     eval_steps: int = 50
@@ -103,14 +116,18 @@ class ReleaseConfig:
             "Trained on synthetic data from one teacher model; coverage outside it is untested.",
         ]
     )
-    teacher: str = "gpt-oss-120b"
-    teacher_licence: str = "Apache-2.0"
+    # Used only when the dataset report does not name them (the card reads the served models
+    # from the samples).
+    teacher: str = "deepseek-v4-pro"
+    teacher_licence: str = "DeepSeek Open Platform Terms of Service"
     teacher_policy: str = (
-        "gpt-oss is used under its Apache-2.0 licence and OpenAI's gpt-oss usage policy "
-        "(https://github.com/openai/gpt-oss/blob/main/USAGE_POLICY)."
+        "DeepSeek's outputs are used under section 4.2 of the DeepSeek Open Platform Terms of "
+        'Service, which assigns the outputs to the user and lists "training other models (such '
+        'as model distillation)" among the permitted uses '
+        "(https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html)."
     )
     judge: str = (
-        "Qwen3.8-27B (local, a different model family from the teacher; scored 1-5 on "
+        "kimi-k3.1-pro (Moonshot API, a different model family from the teacher; scored 1-5 on "
         "eight criteria with a pass or fail)"
     )
     filters: list[str] = field(

@@ -4,16 +4,21 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import make_sample
+from conftest import BRIEF, make_sample
 from test_data_generate import FakeEnv, ScriptedTeacher, good_script, record, tool_turn
 
 from emperor.data.build import build_report, filter_kept
-from emperor.data.generate import GenerationConfig, generate_trace, run_generation
+from emperor.data.generate import (
+    _PREFLIGHT_USER,
+    GenerationConfig,
+    generate_trace,
+    run_generation,
+)
 from emperor.data.judge import JudgeResult, decide, judge_sample, run_judging
 from emperor.data.prompts import normalise
 from emperor.data.retry import prepare_round, retry_dirs
 from emperor.data.schema import table_rows
-from emperor.data.shards import ShardWriter, iter_records
+from emperor.data.shards import ShardWriter, done_ids, iter_records
 from emperor.data.style import STYLE, judge_system
 from emperor.data.teacher import ChatClient, TeacherError
 from emperor.train.config import load_config, parse_config
@@ -398,3 +403,80 @@ def test_a_context_overflow_is_its_own_reject_reason(monkeypatch, tmp_path):
     )
     (reject,) = iter_records(tmp_path / "rejects")
     assert counts["rejected"] == 1 and reject["reason"] == "context_exceeded"
+
+
+def test_generation_and_judging_run_several_prompts_at_once(tmp_path):
+    prompts = tmp_path / "prompts.jsonl"
+    rows = [json.dumps({**record().to_dict(), "id": f"p-{i}"}) for i in range(6)]
+    prompts.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    class Teacher:
+        def chat(self, messages, *, tools=None, **kwargs):
+            done = sum(1 for m in messages if m["role"] == "tool")
+            script = good_script()
+            return {**script[min(done, 2)], "reasoning_content": "Think."}
+
+    counts = run_generation(prompts, tmp_path, Teacher(), FakeEnv(), workers=3)
+    assert counts["accepted"] == 6 and done_ids(tmp_path / "traces") == {f"p-{i}" for i in range(6)}
+    judged = run_judging(tmp_path, RecordingJudge([json.dumps(GOOD)] * 6), workers=3)
+    assert judged["judged"] == 6 and len(done_ids(tmp_path / "judged")) == 6
+
+
+def test_a_too_long_trace_is_not_tried_again(tmp_path):
+    from emperor.data.retry import prepare_round
+
+    teacher = ScriptedTeacher([tool_turn("spawn_agent", {"brief": BRIEF, "tier": "standard"})] * 3)
+    config = GenerationConfig(max_sample_tokens=10)
+    sample, reason = generate_trace(record(), teacher, FakeEnv(), config)
+    assert (sample, reason) == (None, "too_long")
+    prompts = tmp_path / "prompts.jsonl"
+    write_prompts(prompts, ["p-0"])
+    counts = run_generation(prompts, tmp_path, teacher, FakeEnv(), config=config)
+    (reject,) = iter_records(tmp_path / "rejects")
+    assert counts["rejected"] == 1 and reject["attempt_failures"] == ["too_long"]
+    assert prepare_round(tmp_path, 1) == 0  # no retry round for a long task either
+
+
+def test_a_higher_length_limit_tries_earlier_too_long_tasks_again(tmp_path):
+    prompts = tmp_path / "prompts.jsonl"
+    write_prompts(prompts, ["p-0"])
+    short = GenerationConfig(max_sample_tokens=10)
+    long_call = tool_turn("spawn_agent", {"brief": BRIEF, "tier": "standard"})
+    run_generation(prompts, tmp_path, ScriptedTeacher([long_call] * 3), FakeEnv(), config=short)
+    (reject,) = iter_records(tmp_path / "rejects")
+    assert reject["reason"] == "too_long" and reject["max_sample_tokens"] == 10
+    # The same limit again: done. A higher one: the task is generated again and now fits.
+    again = run_generation(prompts, tmp_path, ScriptedTeacher([]), FakeEnv(), config=short)
+    assert again["todo"] == 0
+    longer = GenerationConfig(max_sample_tokens=16384)
+    counts = run_generation(
+        prompts, tmp_path, ScriptedTeacher(good_script()), FakeEnv(), config=longer
+    )
+    assert counts["todo"] == 1 and counts["accepted"] == 1
+
+
+def test_each_verdict_records_the_model_that_gave_it(tmp_path):
+    ShardWriter(tmp_path / "traces", "traces").write(make_sample("p-1"))
+    judge = RecordingJudge([json.dumps(GOOD)])
+    judge.last_model = "kimi-k3.1-pro-highspeed"
+    run_judging(tmp_path, judge, model="kimi-k3.1-pro")
+    (judged,) = iter_records(tmp_path / "judged")
+    assert judged["meta"]["judge"]["model"] == "kimi-k3.1-pro-highspeed"
+
+
+def test_twenty_unparsable_rejects_in_a_row_stop_the_phase(tmp_path):
+    from emperor.data.teacher import TeacherOutputError
+
+    prompts = tmp_path / "prompts.jsonl"
+    write_prompts(prompts, [f"p-{i}" for i in range(30)])
+
+    class Broken:
+        def chat(self, messages, **kwargs):
+            if messages[-1].get("content") == _PREFLIGHT_USER:
+                return {"content": "", "tool_calls": [], "reasoning_content": "ok"}
+            raise TeacherOutputError("HTTP 400: Content Exists Risk")
+
+    counts = run_generation(
+        prompts, tmp_path, Broken(), FakeEnv(), config=GenerationConfig(retries=0)
+    )
+    assert counts["stopped"] and counts["rejected"] == 20 and "in a row" in counts["error"]

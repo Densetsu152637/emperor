@@ -15,6 +15,7 @@ from emperor.train.data import (
     encode_sample,
     load_combined,
     pad_batch,
+    pick_max_length,
     renders_thinking,
     split_records,
 )
@@ -143,6 +144,22 @@ def prepare_datasets(config: SftConfig, tokenizer, root: Path):
     records = load_combined(paths)
     train, val = split_records(records, config.data.val_fraction, config.data.split_seed)
     thinking = base_thinks(tokenizer)
+    if config.data.max_length_auto:
+        lengths = []
+        for sample in records:
+            row, _ = encode_sample(sample, tokenizer, config.data.max_length_cap, thinking=thinking)
+            if row is not None:
+                lengths.append(len(row["input_ids"]))
+        config.data.max_length = pick_max_length(
+            lengths, config.data.max_length_quantile, config.data.max_length_cap
+        )
+        log.info(
+            "training length %d tokens: the %.0f%% quantile of %d samples (cap %d)",
+            config.data.max_length,
+            config.data.max_length_quantile * 100,
+            len(lengths),
+            config.data.max_length_cap,
+        )
     log.info(
         "base is a %s model%s",
         "thinking" if thinking else "non-thinking",
@@ -184,7 +201,10 @@ def train(config: SftConfig, root: Path, pause_file: Path | None = None) -> int:
 
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is not available; check the torch build (cu128 for RTX 50 series)")
-    require_free_vram(config.model.min_free_vram_gib)
+    offload = config.train.offload_activations
+    require_free_vram(
+        config.train.offload_min_free_vram_gib if offload else config.model.min_free_vram_gib
+    )
     log.info("VRAM cap for training: %.1f GiB", cap_vram())
     use_fused_attention()
     shrink_logprob_tiles()
@@ -288,7 +308,10 @@ def train(config: SftConfig, root: Path, pause_file: Path | None = None) -> int:
         def on_step_end(self, args, state, control, **kwargs):
             self._tick(state, "micro-step")
 
-    trainer = SFTTrainer(
+    trainer_class = offloading_trainer(SFTTrainer, torch) if offload else SFTTrainer
+    if offload:
+        log.info("activations offloaded to pinned RAM during training steps")
+    trainer = trainer_class(
         model=model,
         args=args,
         train_dataset=Dataset.from_list(data["train"]),
@@ -317,6 +340,19 @@ def train(config: SftConfig, root: Path, pause_file: Path | None = None) -> int:
         encoding="utf-8",
     )
     return 0
+
+
+def offloading_trainer(base, torch):
+    """A trainer whose training steps save activations to pinned CPU memory. Gradient
+    checkpointing keeps only each layer's input; those move to RAM and come back for the
+    backward pass, so VRAM holds the weights and one layer's working set."""
+
+    class OffloadingTrainer(base):
+        def training_step(self, *args, **kwargs):
+            with torch.autograd.graph.save_on_cpu(pin_memory=True):
+                return super().training_step(*args, **kwargs)
+
+    return OffloadingTrainer
 
 
 def _peak_gib(torch) -> float:

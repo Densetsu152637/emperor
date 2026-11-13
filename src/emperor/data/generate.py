@@ -8,16 +8,19 @@ the teacher's reasoning for it as `reasoning_content` (the contract shared with 
 
 import copy
 import json
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from emperor.data.parallel import Streak, run_items
 from emperor.data.prompts import PromptRecord
+from emperor.data.records import current
 from emperor.data.schema import LICENCE, MAX_TABLE_ROWS, table_rows, validate_sample
-from emperor.data.shards import ShardWriter, done_ids, read_jsonl
-from emperor.data.style import STYLE
+from emperor.data.shards import ShardWriter, read_jsonl
+from emperor.data.style import STYLE, TEACHER_NOTES
 from emperor.data.teacher import (
     TEACHER_MODEL,
     TeacherContextError,
@@ -32,6 +35,8 @@ from emperor.eval.contract import (
     prompt,
     system_prompt,
 )
+
+log = logging.getLogger("emperor.data.generate")
 
 
 class Chat(Protocol):
@@ -53,7 +58,16 @@ class GenerationConfig:
     temperature: float = 0.7
     max_tokens: int = 4096
     teacher_model: str = TEACHER_MODEL
+    host: str = "local llama.cpp"  # where the teacher ran, recorded with every sample
+    licence: str = LICENCE  # the terms the teacher's outputs are used under
+    # Recorded with every sample and reject: pipeline commit, config hash, model ids, guidance
+    # version and pilot number (hosted runs).
+    provenance: dict = field(default_factory=dict)
     retries: int = 2  # extra tries (new seed) when a trace fails the schema check
+    # Failures not worth paying for again: in hosted pilots 1-3 a too_long trace came back
+    # too_long on 30 of 33 extra tries (the task, not the draw, is long), so the extra tries
+    # cost about eleven traces per sample they rescued.
+    no_retry_reasons: frozenset[str] = frozenset({"too_long"})
     force_first_tool: bool = True  # tool_choice "required" on the first turn
     direct_classes: frozenset[str] = field(default_factory=lambda: DIRECT_CLASSES)
     attempt: int = 0  # which retry round this run belongs to (0 is the first pass)
@@ -115,7 +129,7 @@ def teacher_system(context_tokens: int) -> str:
     server reuses its cached prefix instead of reprocessing about 2,000 tokens per task."""
     shapes = "\n\n".join(prompt(name).strip() for name in ("plan", "questions", "brief"))
     budget = system_prompt(context_tokens).rstrip().rsplit("\n", 1)[1]
-    return f"{prompt('emperor-root').rstrip()}\n\n{shapes}\n\n{STYLE}\n{budget}\n"
+    return f"{prompt('emperor-root').rstrip()}\n\n{shapes}\n\n{STYLE}{TEACHER_NOTES}\n{budget}\n"
 
 
 _ENV_SYSTEM = """\
@@ -129,9 +143,10 @@ Rules:
   snippet, one per line. Content must be realistic and consistent with what is known.
 - web_fetch: return the readable text of the page, 120 to 280 words, with concrete facts.
 - A subagent report (await_tasks): write the report the subagent would send for its brief,
-  following the brief's "Output format", 60 to 180 words, with concrete evidence for each
-  acceptance check. Occasionally (about one time in six) report a genuine problem or a failed
-  check, so the assistant has to re-plan.
+  following the brief's "Output format", 40 to 120 words (30 to 70 words each when more than
+  four reports are asked for at once, as for chunks of one long input), with concrete
+  evidence for each acceptance check. Occasionally (about one time in six) report a genuine
+  problem or a failed check, so the assistant has to re-plan.
 - ask_user: write the user's answers, one line per question, as a normal person would; accept
   the recommended answer about half the time.
 Never include credentials, API keys, tokens or private endpoints in any result.
@@ -374,9 +389,9 @@ def check_teacher_reasoning(teacher: Chat, config: "GenerationConfig") -> None:
         if not reasoning_of(reply):
             raise TeacherSetupError(
                 f"the teacher returned no reasoning_content ({label}); a thinking student "
-                "cannot be trained on its traces. Check that llama-server runs with --jinja and "
-                "extracts reasoning (not --reasoning-format none) and that the reasoning effort "
-                "is set"
+                "cannot be trained on its traces. Local: check that llama-server runs with "
+                "--jinja and extracts reasoning (not --reasoning-format none) and that the "
+                "reasoning effort is set. Hosted: check that the teacher role enables thinking"
             )
 
 
@@ -448,7 +463,9 @@ def generate_trace(
             message["tool_calls"] = calls
         # The teacher keeps its own reasoning for this task's earlier turns, as gpt-oss expects
         # across tool calls and as the student will see it; the stored sample keeps it too.
-        teacher_messages.append(with_reasoning(message, reasoning, TEACHER_REASONING_FIELD))
+        # The field is sent even when empty: DeepSeek's thinking mode rejects a tool-calling
+        # request whose earlier assistant turns lack `reasoning_content` (HTTP 400, pilot 1).
+        teacher_messages.append({**message, TEACHER_REASONING_FIELD: reasoning})
         stored.append(with_reasoning(message, reasoning))
         if not calls:
             break
@@ -500,10 +517,11 @@ def generate_trace(
         "messages": stored,
         "meta": {
             "teacher": config.teacher_model,
-            "licence": LICENCE,
+            "licence": config.licence,
             "seed": base_seed,
-            "host": "local llama.cpp",
+            "host": config.host,
             "attempt": config.attempt,
+            **config.provenance,  # a hosted run's commit, config, models, guidance and pilot
         },
     }
     check = validate_sample(sample)
@@ -523,8 +541,10 @@ def _sample_with_retries(
             sample, reason = generate_trace(record, teacher, env_client, config, attempt=attempt)
         except TeacherContextError:  # the trace outgrew the server's context or KV cache
             sample, reason = None, "context_exceeded"
-        except TeacherOutputError:
+        except TeacherOutputError as error:
             sample, reason = None, "teacher_output_unparsable"
+            # What the server said, for diagnosis (a hosted 400 names the bad field).
+            log.warning("%s: teacher output rejected: %s", record.id, str(error)[:300])
         except TeacherError:
             raise
         except Exception as error:  # one bad sample must not end an overnight run
@@ -532,7 +552,19 @@ def _sample_with_retries(
         if sample:
             return sample, None, failures
         failures.append(reason or "unknown")
+        if reason in config.no_retry_reasons:
+            break
     return None, reason, failures
+
+
+LEGACY_SAMPLE_LIMIT = 8192  # the limit of rejects recorded before the limit was stored
+
+
+def too_long_under_lower_limit(reject: dict, limit: int | None) -> bool:
+    if reject.get("reason") != "too_long":
+        return False
+    was = reject.get("max_sample_tokens") or LEGACY_SAMPLE_LIMIT
+    return limit is None or was < limit
 
 
 def run_generation(
@@ -545,8 +577,10 @@ def run_generation(
     limit: int | None = None,
     should_stop: Callable[[], bool] = lambda: False,
     log: Callable[[str], None] = lambda _: None,
+    workers: int = 1,
 ) -> dict:
     """Generate traces for every prompt not yet done; resumable and safe to stop between samples.
+    `workers` prompts run at once (hosted APIs; a local llama-server takes one at a time).
 
     Accepted samples go to `out_dir/traces`, rejections (with reasons) to `out_dir/rejects`; both
     count as done. Returns counts and whether the run stopped early.
@@ -554,7 +588,15 @@ def run_generation(
     config = config or GenerationConfig()
     traces = ShardWriter(out_dir / "traces", "traces")
     rejects = ShardWriter(out_dir / "rejects", "rejects")
-    finished = done_ids(out_dir / "traces") | done_ids(out_dir / "rejects")
+    # The latest record per id counts, and an excluded pilot's tasks are done again. A task
+    # rejected as too_long under a lower length limit than this run's is tried again: those
+    # traces were cut off when they passed the old limit, so they cannot be re-admitted as is.
+    still_rejected = {
+        i
+        for i, r in current(out_dir / "rejects").items()
+        if not too_long_under_lower_limit(r, config.max_sample_tokens)
+    }
+    finished = set(current(out_dir / "traces")) | still_rejected
     todo = [PromptRecord(**r) for r in read_jsonl(prompts_path) if r["id"] not in finished]
     if limit is not None:
         todo = todo[:limit]
@@ -565,17 +607,15 @@ def run_generation(
             check_teacher_reasoning(teacher, config)
         except TeacherError as error:
             return {**counts, "stopped": True, "error": str(error)}
-    for record in todo:
-        if should_stop():
-            counts["stopped"] = True
-            break
-        try:
-            sample, reason, failures = _sample_with_retries(record, teacher, env_client, config)
-        except TeacherError as error:
-            # The server is gone (paused, crashed): leave the id undone and let the caller retry.
-            counts["stopped"] = True
-            counts["error"] = str(error)
-            break
+
+    def work(record: PromptRecord):
+        return _sample_with_retries(record, teacher, env_client, config)
+
+    streak = Streak()
+
+    def handle(record: PromptRecord, result) -> None:
+        sample, reason, failures = result
+        streak.add(reason == "teacher_output_unparsable")
         if sample:
             sample["meta"]["attempts"] = len(failures) + 1
             if failures:
@@ -590,8 +630,20 @@ def run_generation(
                     "reason": reason,
                     "attempts": len(failures),
                     "attempt_failures": failures,
+                    "max_sample_tokens": config.max_sample_tokens,
+                    **config.provenance,
                 }
             )
             counts["rejected"] += 1
         log(f"{record.id} {'ok' if sample else reason}")
+
+    # A TeacherError (server gone, budget reached) leaves the remaining ids undone for a resume.
+    outcome = run_items(
+        todo, work, handle, workers=workers, should_stop=lambda: should_stop() or streak.tripped
+    )
+    counts["stopped"] = outcome["stopped"]
+    if "error" in outcome:
+        counts["error"] = outcome["error"]
+    elif streak.tripped:
+        counts["error"] = streak.error("teacher_output_unparsable rejects")
     return counts
