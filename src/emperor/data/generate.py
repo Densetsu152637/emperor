@@ -252,13 +252,21 @@ class Environment:
             "holding only `### <subagent id>` (for example `### t1`), then the report.",
             max_tokens=min(8192, self.max_tokens * len(briefs)),
         )
-        found = {}
-        for block in re.split(r"(?m)^###\s*", text)[1:]:
-            head, _, body = block.partition("\n")
-            task_id = head.strip().strip("`*: ")
-            if task_id in briefs and body.strip():
-                found[task_id] = body.strip()
-        return found
+        return split_reports(text, list(briefs))
+
+
+def split_reports(text: str, task_ids: list[str]) -> dict[str, str]:
+    """Each report under its `### <id>` line. Only a line naming a known id starts a report, so
+    a report's own `### Findings` heading stays part of it."""
+    names = "|".join(re.escape(t) for t in sorted(task_ids, key=len, reverse=True))
+    header = re.compile(rf"(?m)^###[ \t]*[`*]*({names})[`*:]*[ \t]*$")
+    marks = list(header.finditer(text))
+    found: dict[str, str] = {}
+    for mark, following in zip(marks, [*marks[1:], None], strict=False):
+        body = text[mark.end() : following.start() if following else len(text)].strip()
+        if body and mark.group(1) not in found:
+            found[mark.group(1)] = body
+    return found
 
 
 def _normalise_calls(raw_calls: list[dict], counter: list[int]) -> list[dict]:

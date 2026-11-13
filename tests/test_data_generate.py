@@ -323,6 +323,17 @@ def test_awaited_reports_come_from_one_simulator_call():
     assert len(client.requests) == 1 and "2 subagents" in client.requests[0]
 
 
+def test_a_report_keeps_its_own_headings():
+    from emperor.data.generate import split_reports
+
+    text = "### t1\nSummary.\n### Findings\n- a\n\n### **t2**:\nTwo.\n### t10\nTen."
+    assert split_reports(text, ["t1", "t2", "t10"]) == {
+        "t1": "Summary.\n### Findings\n- a",
+        "t2": "Two.",
+        "t10": "Ten.",
+    }
+
+
 def test_the_teacher_must_set_tags_and_step_checks_the_student_schema_is_unchanged():
     from emperor.data.generate import teacher_tools
     from emperor.eval.contract import openai_tools
