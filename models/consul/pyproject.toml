@@ -1,0 +1,78 @@
+[project]
+name = "consul"
+version = "0.0.0"
+description = "Training, evaluation, and export for Consul, an open-weight critic model for Imperium"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+# The training pipeline, data plumbing, GGUF export and model cards are Emperor's; Consul adds
+# only the critique schema, the seeded-defect tasks, the teacher prompt, its checks and eval.
+dependencies = ["emperor"]
+
+[project.scripts]
+eval = "consul.eval.cli:main"
+data = "consul.data_cli:main"
+pipeline = "consul.pipeline.cli:main"
+hosted = "consul.pipeline.hosted:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.8"]
+# Synthetic data generation against a local llama-server (`uv run --group data data ...`).
+data = ["httpx>=0.27"]
+# Hosted teacher and judge (`uv run hosted ...`): API keys come from the OS credential store.
+hosted = ["keyring>=25"]
+# bf16 LoRA fine-tuning and merging. The torch wheel comes from the CUDA 12.8 index because
+# Blackwell cards (RTX 50 series) need cu128 or newer. Not synced by default: it is multi-GB.
+train = [
+    "torch>=2.8",
+    "transformers>=4.56",
+    "peft>=0.17",
+    "trl>=1.0",
+    "datasets>=4.0",
+    "accelerate>=1.10",
+    "safetensors>=0.5",
+    # llama.cpp's convert_hf_to_gguf.py (GGUF export) imports these.
+    "sentencepiece>=0.2",
+    "protobuf>=4",
+]
+# Uploading to the Hugging Face Hub (`uv run --group publish release publish --confirm ...`).
+publish = ["huggingface_hub>=0.30"]
+
+[tool.uv]
+# The light groups the tests use; train and publish stay opt-in.
+default-groups = ["dev", "data", "hosted"]
+
+[tool.uv.sources]
+# Pinned to emperor's feat/hosted-models branch (hosted clients and runner); re-pin to its merge commit.
+emperor = { git = "https://github.com/Densetsu152637/emperor", rev = "d49ceada80143319ed66752f62e9a0d3796196e3" }
+torch = { index = "pytorch-cu128", marker = "sys_platform == 'win32' or sys_platform == 'linux'" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/consul"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# Emperor's eval/data/pipeline scripts hand over to these when run from this directory (the
+# dependency installs scripts with the same names, so install order alone would decide).
+[tool.emperor.entrypoints]
+eval = "consul.eval.cli:main"
+data = "consul.data_cli:main"
+pipeline = "consul.pipeline.cli:main"
+hosted = "consul.pipeline.hosted:main"

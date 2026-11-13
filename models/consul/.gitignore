@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+.venv/
+
+/checkpoints/
+*.gguf
+*.safetensors
+/data/
+/runs/
+/weights/
+
+/tools/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+/outputs/
+
+# API keys live outside the repository (~/.emperor/.env); never commit a copy.
+.env
+.env.*
+!.env.example
