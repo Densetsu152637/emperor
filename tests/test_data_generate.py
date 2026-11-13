@@ -89,7 +89,7 @@ def test_trace_is_multi_turn_valid_and_records_provenance():
     assert reason is None
     roles = [m["role"] for m in sample["messages"]]
     assert roles == ["system", "user", "assistant", "tool", "assistant", "tool", "assistant"]
-    assert sample["meta"]["teacher"] == "gpt-oss-20b"
+    assert sample["meta"]["teacher"] == "gpt-oss-120b"
     assert sample["meta"]["licence"] == "Apache-2.0"
     assert sample["meta"]["seed"] == 11
     # The environment role answered the await; the spawn result is deterministic.
@@ -207,14 +207,23 @@ def test_teacher_reasoning_is_stored_per_turn_and_kept_in_the_teachers_history()
     ]
 
 
-def test_a_turn_without_reasoning_rejects_the_trace():
+def test_a_first_turn_without_reasoning_rejects_the_trace():
     script = good_script()
-    script[1] = {**script[1], "reasoning_content": None}
+    script[0] = {**script[0], "reasoning_content": None}
     sample, reason = generate_trace(record(), ScriptedTeacher(script), FakeEnv())
     assert (sample, reason) == (None, "no_reasoning")
     config = GenerationConfig(require_reasoning=False)
     sample, reason = generate_trace(record(), ScriptedTeacher(script), FakeEnv(), config)
-    assert reason is None and "reasoning_content" not in sample["messages"][4]
+    assert reason is None and "reasoning_content" not in sample["messages"][2]
+
+
+def test_a_later_turn_without_reasoning_is_kept_as_is():
+    script = good_script()
+    script[1] = {**script[1], "reasoning_content": None}
+    sample, reason = generate_trace(record(), ScriptedTeacher(script), FakeEnv())
+    assert reason is None
+    assert "reasoning_content" not in sample["messages"][4]
+    assert sample["messages"][2]["reasoning_content"] == REASONING
 
 
 class ForcedToolHidesReasoning:
@@ -262,8 +271,121 @@ def test_generation_defaults_to_low_reasoning_effort():
     from emperor.data.cli import build_parser
     from emperor.data.teacher import ChatClient
 
-    args = build_parser().parse_args(["retry"])
-    assert (args.reasoning_effort, args.judge_reasoning_effort) == ("low", "medium")
-    assert args.environment_reasoning_effort == "medium"
+    args = build_parser().parse_args(["generate"])
+    assert (args.reasoning_effort, args.environment_reasoning_effort) == ("medium", "medium")
     assert build_parser().parse_args(["judge"]).judge_reasoning_effort == "medium"
-    assert ChatClient.__init__.__kwdefaults__["reasoning_effort"] == "low"
+    assert ChatClient.__init__.__kwdefaults__["reasoning_effort"] == "medium"
+
+
+def test_the_teacher_prompt_differs_between_tasks_only_at_its_end():
+    from emperor.data.generate import teacher_system
+
+    small, large = teacher_system(32 * 1024), teacher_system(128 * 1024)
+    assert small.rstrip().endswith("context budget: 32K tokens")
+    assert large.rstrip().endswith("context budget: 128K tokens")
+    shared = len(small.rstrip().rsplit("\n", 1)[0])
+    assert small[:shared] == large[:shared] and shared > 0.95 * len(small)
+
+
+def test_a_trace_longer_than_the_training_length_is_rejected_early():
+    teacher = ScriptedTeacher(good_script())
+    sample, reason = generate_trace(
+        record(), teacher, FakeEnv(), GenerationConfig(max_sample_tokens=1500)
+    )
+    assert (sample, reason) == (None, "too_long")
+    assert len(teacher.seen) == 1  # stopped after the first turn's tool result
+    sample, reason = generate_trace(record(), ScriptedTeacher(good_script()), FakeEnv())
+    assert reason is None
+
+
+class BatchEnv:
+    """Answers a batched await with one section per subagent."""
+
+    def __init__(self):
+        self.requests = []
+
+    def chat(self, messages, **kwargs):
+        self.requests.append(messages[-1]["content"])
+        return {"content": "### t1\nReport one.\n\n### `t2`\nReport two."}
+
+
+def test_awaited_reports_come_from_one_simulator_call():
+    client = BatchEnv()
+    env = Environment(client, "task", seed=1)
+    env.run("spawn_agent", {"brief": BRIEF})
+    env.run("spawn_agent", {"brief": BRIEF})
+    reports = json.loads(env.run("await_tasks", {}))["reports"]
+    assert [(r["task_id"], r["report"]) for r in reports] == [
+        ("t1", "Report one."),
+        ("t2", "Report two."),
+    ]
+    assert len(client.requests) == 1 and "2 subagents" in client.requests[0]
+
+
+def test_a_report_keeps_its_own_headings():
+    from emperor.data.generate import split_reports
+
+    text = "### t1\nSummary.\n### Findings\n- a\n\n### **t2**:\nTwo.\n### t10\nTen."
+    assert split_reports(text, ["t1", "t2", "t10"]) == {
+        "t1": "Summary.\n### Findings\n- a",
+        "t2": "Two.",
+        "t10": "Ten.",
+    }
+
+
+def test_the_teacher_must_set_tags_and_step_checks_the_student_schema_is_unchanged():
+    from emperor.data.generate import teacher_tools
+    from emperor.eval.contract import openai_tools
+
+    names = ["spawn_agent", "update_plan"]
+    teacher = {t["function"]["name"]: t["function"]["parameters"] for t in teacher_tools(names)}
+    real = {t["function"]["name"]: t["function"]["parameters"] for t in openai_tools(names)}
+    assert set(teacher["spawn_agent"]["required"]) == {"brief", "tier", "tags"}
+    assert real["spawn_agent"]["required"] == ["brief"]
+    step = teacher["update_plan"]["properties"]["steps"]["items"]["required"]
+    assert {"owner", "acceptance"} <= set(step)
+    assert "acceptance" not in real["update_plan"]["properties"]["steps"]["items"]["required"]
+
+
+def test_the_simulator_sees_its_earlier_results():
+    env_client = FakeEnv()
+    env = Environment(env_client, "task", seed=1)
+    env.run("web_search", {"query": "a"})
+    env.run("web_fetch", {"url": "https://example.com"})
+    assert "Results already given" not in env_client.requests[0]
+    assert "Report: done. Evidence: all checks pass." in env_client.requests[1]
+
+
+def test_a_reply_that_stops_at_the_plan_is_drawn_again():
+    plan = tool_turn("update_plan", {"steps": [{"title": "a", "status": "pending"}]})
+    script = [plan, {"content": "Here is the plan."}, *good_script()]
+    teacher = ScriptedTeacher(script)
+    sample, reason = generate_trace(record(), teacher, FakeEnv())
+    assert reason is None
+    names = [
+        c["function"]["name"]
+        for m in sample["messages"]
+        if m["role"] == "assistant"
+        for c in m.get("tool_calls") or []
+    ]
+    assert names == ["update_plan", "spawn_agent", "await_tasks"]
+    assert "Here is the plan." not in [m.get("content") for m in sample["messages"]]
+
+    # After the extra draws run out, the plan-only trace is rejected before the judge.
+    stubborn = ScriptedTeacher([plan, *[{"content": "Plan only."}] * 3])
+    sample, reason = generate_trace(record(), stubborn, FakeEnv())
+    assert sample is None and reason == "plan_only"
+    # A clarify task may end with a plan and questions.
+    clarify = ScriptedTeacher([plan, {"content": "Two questions first."}])
+    sample, reason = generate_trace(record(task_class="clarify"), clarify, FakeEnv())
+    assert reason is None and len(clarify.seen) == 2
+
+
+def test_a_tool_call_is_required_until_work_starts():
+    plan = tool_turn("update_plan", {"steps": [{"title": "a", "status": "pending"}]})
+    teacher = ScriptedTeacher([plan, *good_script()])
+    sample, reason = generate_trace(record(), teacher, FakeEnv())
+    assert reason is None
+    forced = [k.get("tool_choice") for k in teacher.kwargs]
+    # Turn 0 (plan) and turn 1 (only a plan so far) are forced; after spawn_agent they are not.
+    assert forced == ["required", "required", None, None]

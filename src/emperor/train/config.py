@@ -15,7 +15,7 @@ class ConfigError(ValueError):
 
 @dataclass
 class ModelConfig:
-    base: str = "D:/AI-Models/Qwen/Qwen3.5-4B"
+    base: str = "F:/AI-Models/Qwen/Qwen3.5-4B"
     attn_implementation: str = "sdpa"
     min_free_vram_gib: float = 13.5  # Qwen3.5 peaks at 13.0 GiB at 8192 tokens, plus CUDA context
 
@@ -103,9 +103,16 @@ class ReleaseConfig:
             "Trained on synthetic data from one teacher model; coverage outside it is untested.",
         ]
     )
-    teacher: str = "gpt-oss-20b"
+    teacher: str = "gpt-oss-120b"
     teacher_licence: str = "Apache-2.0"
-    judge: str = "gpt-oss-20b (local, scored 1-5 on eight criteria with a pass or fail)"
+    teacher_policy: str = (
+        "gpt-oss is used under its Apache-2.0 licence and OpenAI's gpt-oss usage policy "
+        "(https://github.com/openai/gpt-oss/blob/main/USAGE_POLICY)."
+    )
+    judge: str = (
+        "Qwen3.8-27B (local, a different model family from the teacher; scored 1-5 on "
+        "eight criteria with a pass or fail)"
+    )
     filters: list[str] = field(
         default_factory=lambda: [
             "schema checks (tool calls, roles, brief sections and size)",

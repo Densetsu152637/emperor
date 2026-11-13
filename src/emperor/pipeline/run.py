@@ -6,6 +6,7 @@ the machine is idle again. All work is resumable: shards are append-only and tra
 from its last checkpoint, so a run directory can be reused with `--resume`.
 """
 
+import dataclasses
 import json
 import logging
 import signal
@@ -21,7 +22,7 @@ from emperor.data.build import filter_kept, write_report
 from emperor.data.generate import GenerationConfig, run_generation
 from emperor.data.judge import run_judging
 from emperor.data.prompts import HeldoutIndex, generate_prompts, normalise
-from emperor.data.retry import prepare_round, round_dir, run_retry_rounds
+from emperor.data.retry import prepare_round, round_dir
 from emperor.data.shards import done_ids, iter_records, read_jsonl
 from emperor.data.teacher import (
     ENVIRONMENT_EFFORT,
@@ -29,6 +30,7 @@ from emperor.data.teacher import (
     JUDGE_EFFORT,
     ChatClient,
     TeacherSetupError,
+    model_name,
 )
 from emperor.eval.cli import CONTEXT_TIERS
 from emperor.export.gguf import DEFAULT_CACHE, gguf_dir_for, gguf_name
@@ -57,7 +59,34 @@ PHASES = [
     "eval",
     "card",
 ]
-DEFAULT_TEACHER_GGUF = "D:/AI-Models/unsloth/gpt-oss-20b-GGUF/gpt-oss-20b-Q4_K_M.gguf"
+DEFAULT_TEACHER_GGUF = "F:/AI-Models/unsloth/gpt-oss-120b-GGUF/gpt-oss-120b-F16.gguf"
+DEFAULT_JUDGE_GGUF = "D:/AI-Models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf"
+# The teacher server keeps one slot per role, so the teacher's growing conversation and the
+# tool simulator's short prompts each stay cached instead of evicting each other.
+TEACHER_SLOT, ENVIRONMENT_SLOT = 0, 1
+# The 65 GB teacher takes about 9 minutes to load from disk; the old 10-minute limit was too tight.
+SERVER_LOAD_SECONDS = 3600.0
+# The 120B teacher does not fit in RAM beside Windows: its CPU experts (51 GB) are paged in from
+# disk on demand. No host-RAM prompt cache next to it, and no weight repacking, so every CPU
+# weight stays file-backed and the OS can drop and re-read pages instead of swapping copies.
+# No op offload: by default every prompt-processing batch streams all CPU experts to the GPU,
+# which on this machine means paging all 51 GB in from disk for each 512-token batch.
+# One KV buffer shared by the two role slots (the simulator's prompts are short), and a
+# smaller VRAM margin: every GiB of GPU memory not spent on KV holds experts that would
+# otherwise compete for RAM.
+# Eight CPU threads, one per performance core of this machine's i7-13700KF. With llama.cpp's
+# default thread count, any background load stalls the threads that land on efficiency cores and
+# generation fell to 3-4 tok/s; with 8 it ran at 27-32 tok/s under the same load.
+TEACHER_THREADS = ["-t", "8"]  # the 27B judge runs at the same speed either way
+TEACHER_SERVER_ARGS = [
+    "--cache-ram",
+    "0",
+    "--no-repack",
+    "--no-op-offload",
+    "--kv-unified",
+    *TEACHER_THREADS,
+]
+TEACHER_VRAM_MARGIN_MIB = 512
 
 
 @dataclass
@@ -74,7 +103,12 @@ class Settings:
     min_samples: int = 100
     teacher_gguf: Path = Path(DEFAULT_TEACHER_GGUF)
     teacher_port: int = 8081
-    teacher_context: int = 32768
+    # Per slot; the two slots share one 24K buffer. The longest pilot prompt was about 10K
+    # tokens plus a 4K reply.
+    teacher_context: int = 12288
+    judge_gguf: Path = Path(DEFAULT_JUDGE_GGUF)
+    judge_context: int = 32768  # transcript plus the judge's own thinking
+    judge_thinking: bool = True
     parallel: int = 1
     reasoning_effort: str = GENERATE_EFFORT  # generation; the reasoning is trained on
     judge_reasoning_effort: str = JUDGE_EFFORT
@@ -136,6 +170,14 @@ def _monitor(watcher, resource, stop, finished: threading.Event, seconds: float)
         if watcher():
             stop(resource)
             return
+
+
+PROGRESS_KEYS = ("accepted", "rejected", "judged")  # what generation and judging count
+
+
+def made_progress(result: dict) -> bool:
+    """Whether a stopped worker finished any item before it stopped."""
+    return any(int(result.get(key) or 0) > 0 for key in PROGRESS_KEYS)
 
 
 def run_gated(
@@ -201,6 +243,10 @@ def run_gated(
             pauses += 1
             log.info("%s paused: %s", name, watcher.reason)
         else:
+            # A server that dies after hours of useful work is not a repeated failure: only
+            # consecutive starts that got nothing done count toward the limit.
+            if made_progress(result):
+                failures = 0
             failures += 1
             log.warning(
                 "%s failed (%s); attempt %d of %d",
@@ -251,19 +297,33 @@ class Pipeline:
         log.info("phase %s: %s", name, result.get("status"))
         return result
 
-    def _server_phase(self, name: str, gguf: Path, port: int, context: int, work) -> dict:
+    def _server_phase(
+        self,
+        name: str,
+        gguf: Path,
+        port: int,
+        context: int,
+        work,
+        parallel: int | None = None,
+        extra_args: list[str] | None = None,
+        vram_margin_mib: int = 1536,
+    ) -> dict:
         binary = find_llama_server(self.s.llama_server)
         if binary is None:
             return {"status": "failed", "error": "llama-server not found; set EMPEROR_LLAMA_SERVER"}
         if not gguf.is_file():
             return {"status": "failed", "error": f"model not found: {gguf}"}
-        parallel = self.s.parallel if name != "eval" else 1
+        if parallel is None:
+            parallel = self.s.parallel if name != "eval" else 1
 
         def start():
-            command = llama_server_command(binary, gguf, port, context, parallel)
+            command = llama_server_command(
+                binary, gguf, port, context, parallel, vram_margin_mib=vram_margin_mib
+            )
+            command += extra_args or []
             server = ManagedProcess(command, self.s.run_dir / f"llama-{name}.log", self.own).start()
             log.info("%s: llama-server pid %s on port %d", name, server.pid, port)
-            if not wait_for_health(f"http://127.0.0.1:{port}", server):
+            if not wait_for_health(f"http://127.0.0.1:{port}", server, SERVER_LOAD_SECONDS):
                 server.stop()
                 raise RuntimeError("llama-server did not become ready")
             return server
@@ -302,98 +362,100 @@ class Pipeline:
         return {"status": "done", "prompts": len(own)}
 
     def _generation_config(self) -> GenerationConfig:
-        return GenerationConfig(retries=self.s.retries, force_first_tool=self.s.force_first_tool)
+        return GenerationConfig(
+            retries=self.s.retries,
+            force_first_tool=self.s.force_first_tool,
+            teacher_model=model_name(self.s.teacher_gguf),
+        )
 
-    def _teacher_work(self, kind: str):
+    def _teacher_phase(self, name: str, work) -> dict:
+        """The teacher's server: one slot per role (generation runs one request at a time)."""
+        return self._server_phase(
+            name,
+            self.s.teacher_gguf,
+            self.s.teacher_port,
+            self.s.teacher_context,
+            work,
+            parallel=max(self.s.parallel, ENVIRONMENT_SLOT + 1),
+            extra_args=TEACHER_SERVER_ARGS,
+            vram_margin_mib=TEACHER_VRAM_MARGIN_MIB,
+        )
+
+    def _judge_phase(self, name: str, work) -> dict:
+        """The judge's own server, a different model; it never runs beside the teacher."""
+        return self._server_phase(
+            name, self.s.judge_gguf, self.s.teacher_port, self.s.judge_context, work, parallel=1
+        )
+
+    def _generate_work(self, directory: Path, attempt: int = 0):
         def work(server, should_stop):
             url = f"http://127.0.0.1:{self.s.teacher_port}/v1"
-            client = ChatClient(
-                url,
-                reasoning_effort=(
-                    self.s.judge_reasoning_effort if kind == "judge" else self.s.reasoning_effort
-                ),
-            )
-            judge_client = (
-                ChatClient(url, reasoning_effort=self.s.judge_reasoning_effort)
-                if kind == "retry"
-                else None
-            )
-            environment_client = (
-                ChatClient(url, reasoning_effort=self.s.environment_reasoning_effort)
-                if kind in ("generate", "retry")
-                else None
+            client = ChatClient(url, reasoning_effort=self.s.reasoning_effort, slot=TEACHER_SLOT)
+            environment = ChatClient(
+                url, reasoning_effort=self.s.environment_reasoning_effort, slot=ENVIRONMENT_SLOT
             )
             try:
-                if kind == "generate":
-                    counts = run_generation(
-                        self.s.data_dir / "prompts.jsonl",
-                        self.s.data_dir,
-                        client,
-                        environment_client,
-                        config=self._generation_config(),
-                        should_stop=should_stop,
-                        log=log.debug,
-                    )
-                elif kind == "retry":
-                    counts = run_retry_rounds(
-                        self.s.data_dir,
-                        client,
-                        judge_client=judge_client,
-                        environment_client=environment_client,
-                        rounds=self.s.retries,
-                        config=self._generation_config(),
-                        threshold=self.s.threshold,
-                        should_stop=should_stop,
-                        log=log.debug,
-                    )
-                else:
-                    counts = run_judging(
-                        self.s.data_dir,
-                        client,
-                        threshold=self.s.threshold,
-                        should_stop=should_stop,
-                        log=log.debug,
-                    )
+                counts = run_generation(
+                    directory / "prompts.jsonl",
+                    directory,
+                    client,
+                    environment,
+                    config=dataclasses.replace(self._generation_config(), attempt=attempt),
+                    should_stop=should_stop,
+                    log=log.debug,
+                )
             finally:
                 client.close()
-                for extra in (judge_client, environment_client):
-                    if extra is not None:
-                        extra.close()
-            log.info("%s: %s", kind, counts)
+                environment.close()
+            log.info("generate %s: %s", directory.name, counts)
             return {**counts, "stopped": counts.get("stopped", False)}
 
         return work
 
-    def _pending(self, source: str, done: str) -> int:
-        finished = done_ids(self.s.data_dir / done)
+    def _judge_work(self, directory: Path):
+        def work(server, should_stop):
+            judge = model_name(self.s.judge_gguf)  # the weights this phase actually serves
+            client = ChatClient(
+                f"http://127.0.0.1:{self.s.teacher_port}/v1",
+                model=judge,
+                reasoning_effort=self.s.judge_reasoning_effort,
+                template_kwargs={"enable_thinking": self.s.judge_thinking},
+            )
+            try:
+                counts = run_judging(
+                    directory,
+                    client,
+                    threshold=self.s.threshold,
+                    should_stop=should_stop,
+                    log=log.debug,
+                    model=judge,
+                )
+            finally:
+                client.close()
+            log.info("judge %s: %s", directory.name, counts)
+            return {**counts, "stopped": counts.get("stopped", False)}
+
+        return work
+
+    def _pending(self, source: str, done: str, directory: Path | None = None) -> int:
+        directory = directory or self.s.data_dir
+        finished = done_ids(directory / done)
         if source == "prompts.jsonl":
-            finished |= done_ids(self.s.data_dir / "rejects")
-            records = read_jsonl(self.s.data_dir / source)
+            finished |= done_ids(directory / "rejects")
+            records = read_jsonl(directory / source)
         else:
-            records = iter_records(self.s.data_dir / source)
+            records = iter_records(directory / source)
         return sum(1 for r in records if r["id"] not in finished)
 
     def phase_generate(self) -> dict:
         if self._pending("prompts.jsonl", "traces") == 0:
             return {"status": "done", "note": "nothing left to generate"}
-        return self._server_phase(
-            "generate",
-            self.s.teacher_gguf,
-            self.s.teacher_port,
-            self.s.teacher_context,
-            self._teacher_work("generate"),
-        )
+        return self._teacher_phase("generate", self._generate_work(self.s.data_dir))
 
     def phase_judge(self) -> dict:
         if self._pending("traces", "judged") == 0:
             return {"status": "done", "note": "nothing left to judge"}
-        return self._server_phase(
-            "judge",
-            self.s.teacher_gguf,
-            self.s.teacher_port,
-            self.s.teacher_context,
-            self._teacher_work("judge"),
-        )
+        return self._judge_phase("judge", self._judge_work(self.s.data_dir))
 
     def phase_retry(self) -> dict:
         """Regenerate and rejudge rejected prompts (new seeds), up to `retries` rounds."""
@@ -401,13 +463,29 @@ class Pipeline:
             return {"status": "skipped", "reason": "retries is 0"}
         if self._retry_pending() == 0:
             return {"status": "done", "note": "nothing left to retry"}
-        return self._server_phase(
-            "retry",
-            self.s.teacher_gguf,
-            self.s.teacher_port,
-            self.s.teacher_context,
-            self._teacher_work("retry"),
-        )
+        rounds: dict = {}
+        for k in range(1, self.s.retries + 1):
+            if prepare_round(self.s.data_dir, k) == 0:
+                break
+            directory = round_dir(self.s.data_dir, k)
+            # Generate the whole round on the teacher, then judge it on the judge's server.
+            steps = [
+                ("generate", "prompts.jsonl", "traces", self._teacher_phase),
+                ("judge", "traces", "judged", self._judge_phase),
+            ]
+            for kind, source, done, phase in steps:
+                if self._pending(source, done, directory) == 0:
+                    continue
+                work = (
+                    self._generate_work(directory, attempt=k)
+                    if kind == "generate"
+                    else self._judge_work(directory)
+                )
+                result = phase(f"retry-{k}-{kind}", work)
+                rounds[f"retry-{k}-{kind}"] = result
+                if result.get("status") in ("quit", "failed"):
+                    return {**result, "rounds": rounds}
+        return {"status": "done", "rounds": rounds}
 
     def _retry_pending(self) -> int:
         """Work left in the retry rounds: unfinished rounds, or failures not yet retried."""

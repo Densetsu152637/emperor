@@ -31,11 +31,13 @@ stages out. Record each stage's outcome in the plan when it is done.
 | --- | --- |
 | Eval harness (stage 2b) | this repository, `uv run eval` |
 | Tool contract and prompts | vendored under `src/emperor/eval/vendor/` (pin in `SOURCE`) |
-| Lead base, bf16 (Qwen3.5-4B, thinking on by default, Apache-2.0) | `D:/AI-Models/Qwen/Qwen3.5-4B/` |
+| Lead base, bf16 (Qwen3.5-4B, thinking on by default, Apache-2.0) | `F:/AI-Models/Qwen/Qwen3.5-4B/` |
 | Round 1 base, bf16 (non-thinking) | `D:/AI-Models/unsloth/Qwen3-4B-Instruct-2507/` |
 | Lead base, Q4_K_M GGUF | `D:/AI-Models/unsloth/Qwen3-4B-Instruct-2507-GGUF/` |
 | Fallback base, Q4_K_M GGUF | `D:/AI-Models/unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q4_K_M.gguf` |
-| Local teacher, Q4_K_M GGUF | `D:/AI-Models/unsloth/gpt-oss-20b-GGUF/gpt-oss-20b-Q4_K_M.gguf` |
+| Local teacher, F16 GGUF | `F:/AI-Models/unsloth/gpt-oss-120b-GGUF/gpt-oss-120b-F16.gguf` |
+| Local judge, Q4_K_XL GGUF | `D:/AI-Models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf` |
+| Round 1 teacher and judge | `D:/AI-Models/unsloth/gpt-oss-20b-GGUF/gpt-oss-20b-Q4_K_M.gguf` |
 | llama.cpp runtime | Imperium's pinned build (`runtimes/llama-cpp.env` in Imperium-AI) |
 
 Still missing: the Hugging Face organisation (create it on the website; `Imperium.AI` is a
@@ -105,6 +107,41 @@ in `data/`; the dataset goes to a private Hugging Face repository (`<org>/empero
 4. **Validate.** `uv run data validate` must report 100 % of samples parsing against the
    vendored schemas, 0 secret-pattern hits, and clean dedup and held-out overlap checks.
 5. **Datasheet.** List every source with its licence and provider terms.
+
+### Full run: both datasets first, then training
+
+Generate and judge both models' data before any training. Only one model may run at a time
+(teacher, judge, training or eval), and both pipelines serve on port 8081, so **never run two
+pipelines at once**: start the next only after the previous one's summary says it finished.
+The pipeline itself never runs two models together (the teacher stops before the judge starts).
+
+1. Emperor's data, from the emperor checkout (about 2,000 prompts; generation and judging take
+   days and pause whenever the machine is in use):
+
+   ```powershell
+   uv run --group data --group train pipeline --detach --only prompts --only generate `
+     --only judge --only retry --only filter
+   ```
+
+   Wait until `runs/<timestamp>/summary.json` reports `done` (or resume the same run with
+   `--resume runs/<timestamp>` and the same `--only` flags after a stop).
+2. Consul's data, from the consul checkout, the same way (Consul has no retry rounds):
+
+   ```powershell
+   uv run --group data --group train pipeline --detach --only prompts --only generate `
+     --only judge --only filter
+   ```
+
+3. Training, one model at a time and only while the machine is idle: resume each data run with
+   the remaining phases, Emperor first, then Consul once Emperor's summary is `done`:
+
+   ```powershell
+   uv run --group data --group train pipeline --detach --resume runs/<timestamp> `
+     --only train --only merge --only export --only eval --only card
+   ```
+
+`--skip train --skip merge --skip export --skip eval --skip card` also stops after the data,
+but records those phases as skipped; `--only` leaves them untouched for the later resume.
 
 ## Stage 5: supervised fine-tuning (bf16 LoRA)
 

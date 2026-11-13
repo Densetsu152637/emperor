@@ -174,7 +174,8 @@ def test_card_renders_every_section_from_a_sample_report():
     assert "| tool_validity | G1 | 40 | 0.975 | 0.98 | no |" in text
     assert "| retrieval | G6 | 0 | n/a | n/a | n/a |" in text
     assert "r=32, alpha=64" in text and "Final training loss: 0.4321" in text
-    assert "Teacher: gpt-oss-20b (Apache-2.0)" in text and "Judge pass rate: 70.6%" in text
+    assert "Teacher: gpt-oss-120b (Apache-2.0)" in text and "Judge pass rate: 70.6%" in text
+    assert "gpt-oss usage policy" in text and "Judge: Qwen3.8-27B" in text
     assert "coding 700, planning 500" in text
     assert "## Memory and context" in text and "| bf16 | 8.0 |" in text
     assert "dry run" not in text

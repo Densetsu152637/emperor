@@ -155,3 +155,22 @@ def test_reasoning_is_checked_for_secrets_and_hidden_from_the_judge(sample):
     assert "secret_in_reasoning" in reasons(sample)
     sample["messages"][-1]["reasoning_content"] = ["not", "text"]
     assert "reasoning_not_text" in reasons(sample)
+
+
+def test_a_thinking_judge_is_parsed_from_its_answer_and_named_in_the_verdict(tmp_path):
+    from emperor.data.judge import judge_answer
+
+    thought = 'Scores like {"scores": 1} are wrong here. Let me decide.'
+    assert judge_answer({"content": f"<think>{thought}</think>\n{json.dumps(GOOD)}"}) == (
+        "\n" + json.dumps(GOOD)
+    )
+    assert judge_answer({"content": f"{thought}</think>{json.dumps(GOOD)}"}) == json.dumps(GOOD)
+    assert judge_answer({"content": f"<think>{thought}"}) == ""  # out of tokens mid-thought
+    assert judge_answer({"content": "{}", "reasoning_content": thought}) == "{}"
+
+    ShardWriter(tmp_path / "traces", "traces").write(make_sample("p-0"))
+    reply = f"<think>{thought}</think>{json.dumps(GOOD)}"
+    run_judging(tmp_path, FakeJudge([reply]))
+    (judged,) = iter_records(tmp_path / "judged")
+    assert judged["meta"]["judge"]["keep"] is True
+    assert judged["meta"]["judge"]["model"] == "Qwen3.8-27B"

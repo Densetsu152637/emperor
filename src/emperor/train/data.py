@@ -172,14 +172,16 @@ def reasoning_spans(
     of every assistant turn after the last user query, from the first reasoning character
     (the generation prompt already holds `<think>`) through the end-of-turn token.
 
-    Raises MissingReasoning when one of those turns has no `reasoning_content`.
+    Raises MissingReasoning when the first of those turns has no `reasoning_content`. Later
+    turns may have none: the teacher often acts on a tool result without thinking again, and
+    Qwen3.5's template renders such a turn with an empty think block, which is trained as is.
     """
     query = last_query_index(messages)
     trained = [
         i for i, message in enumerate(messages) if message["role"] == "assistant" and i > query
     ]
-    if any(not has_reasoning(messages[i]) for i in trained):
-        raise MissingReasoning("an assistant turn after the last user message has no reasoning")
+    if trained and not has_reasoning(messages[trained[0]]):
+        raise MissingReasoning("the first assistant turn after the user message has no reasoning")
     full = render(messages, add_generation_prompt=False)
     spans = []
     for i in trained:

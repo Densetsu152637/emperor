@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from conftest import make_sample
 from test_data_generate import FakeEnv, ScriptedTeacher, good_script, record, tool_turn
 
@@ -10,11 +11,11 @@ from emperor.data.build import build_report, filter_kept
 from emperor.data.generate import GenerationConfig, generate_trace, run_generation
 from emperor.data.judge import JudgeResult, decide, judge_sample, run_judging
 from emperor.data.prompts import normalise
-from emperor.data.retry import prepare_round, retry_dirs, run_retry_rounds
+from emperor.data.retry import prepare_round, retry_dirs
 from emperor.data.schema import table_rows
-from emperor.data.shards import ShardWriter, done_ids, iter_records
+from emperor.data.shards import ShardWriter, iter_records
 from emperor.data.style import STYLE, judge_system
-from emperor.data.teacher import ChatClient
+from emperor.data.teacher import ChatClient, TeacherError
 from emperor.train.config import load_config, parse_config
 from emperor.train.data import load_combined
 
@@ -53,9 +54,28 @@ def test_markdown_tables_are_rejected_at_generation():
     table = "\n".join(["| a | b |"] * 6)
     script = good_script()
     script[-1] = {"content": table}
-    sample, reason = generate_trace(record(), ScriptedTeacher(script), FakeEnv())
+    # The teacher is asked once to rewrite the table; it answers with another table.
+    teacher = ScriptedTeacher([*script, {"content": table}])
+    sample, reason = generate_trace(record(), teacher, FakeEnv())
     assert sample is None and reason == "markdown_table"
+    assert "no Markdown table" in teacher.seen[-1][0][-1]["content"]
     assert table_rows(table) == 6
+    off = GenerationConfig(rewrite_tables=False)
+    sample, reason = generate_trace(record(), ScriptedTeacher(script), FakeEnv(), off)
+    assert reason == "markdown_table"
+
+
+def test_a_final_table_is_rewritten_by_the_teacher():
+    table = "\n".join(["| a | b |"] * 6)
+    script = good_script()
+    script[-1] = {"content": table, "reasoning_content": "Summarise."}
+    rewrite = {"content": "- a: b\n- a: b", "reasoning_content": "List it instead."}
+    teacher = ScriptedTeacher([*script, rewrite])
+    sample, reason = generate_trace(record(), teacher, FakeEnv())
+    assert reason is None
+    assert sample["messages"][-1]["content"] == "- a: b\n- a: b"
+    # The stored turn carries the reasoning that produced the rewrite, not the table's.
+    assert sample["messages"][-1]["reasoning_content"] == "List it instead."
 
 
 def test_style_forbids_tables_and_demands_tools_first():
@@ -65,8 +85,9 @@ def test_style_forbids_tables_and_demands_tools_first():
 
 
 class _Response:
-    def __init__(self, status=200):
+    def __init__(self, status=200, text=""):
         self.status_code = status
+        self.text = text
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -79,22 +100,40 @@ class _Response:
 
 
 class _Http:
-    def __init__(self, reject_tool_choice):
+    def __init__(self, reject_tool_choice, message="tool_choice is not supported"):
         self.bodies = []
         self.reject = reject_tool_choice
+        self.message = message
 
     def post(self, url, json):
         self.bodies.append(dict(json))
-        return _Response(400 if self.reject and "tool_choice" in json else 200)
+        if self.reject and "tool_choice" in json:
+            return _Response(400, self.message)
+        return _Response(200)
 
 
 def test_client_sends_tool_choice_and_falls_back_when_the_server_rejects_it():
     client = ChatClient.__new__(ChatClient)  # skips the httpx import (a separate dependency group)
     client.base_url, client.model, client.retries = "http://127.0.0.1:1/v1", "m", 3
     client.reasoning_effort, client.tool_choice_supported = None, True
+    client.slot, client.template_kwargs = None, {}
     client._http = _Http(reject_tool_choice=False)
     client.chat(USER, tools=TOOLS, tool_choice="required")
     assert client._http.bodies[0]["tool_choice"] == "required"
+    assert "id_slot" not in client._http.bodies[0]
+    assert "chat_template_kwargs" not in client._http.bodies[0]
+
+    # A role's slot and the template options go with every request.
+    client.slot, client.template_kwargs, client.reasoning_effort = (
+        1,
+        {"enable_thinking": True},
+        "low",
+    )
+    client.chat(USER)
+    body = client._http.bodies[-1]
+    assert body["id_slot"] == 1
+    assert body["chat_template_kwargs"] == {"enable_thinking": True, "reasoning_effort": "low"}
+    client.slot, client.template_kwargs, client.reasoning_effort = None, {}, None
 
     client._http = _Http(reject_tool_choice=True)
     assert client.chat(USER, tools=TOOLS, tool_choice="required")["content"] == "hi"
@@ -102,6 +141,19 @@ def test_client_sends_tool_choice_and_falls_back_when_the_server_rejects_it():
     assert not client.tool_choice_supported
     client.chat(USER, tools=TOOLS, tool_choice="required")
     assert "tool_choice" not in client._http.bodies[-1]
+
+
+def test_an_unrelated_400_keeps_forced_tool_calls(monkeypatch):
+    monkeypatch.setattr("emperor.data.teacher.time.sleep", lambda _: None)
+    client = ChatClient.__new__(ChatClient)
+    client.base_url, client.model, client.retries = "http://127.0.0.1:1/v1", "m", 2
+    client.reasoning_effort, client.tool_choice_supported = None, True
+    client.slot, client.template_kwargs = None, {}
+    client._http = _Http(reject_tool_choice=True, message="the request exceeds the context")
+    with pytest.raises(TeacherError):
+        client.chat(USER, tools=TOOLS, tool_choice="required")
+    assert client.tool_choice_supported
+    assert all(body.get("tool_choice") == "required" for body in client._http.bodies)
 
 
 # -- rejection sampling ------------------------------------------------------------------------
@@ -152,6 +204,16 @@ def test_unparseable_judgement_is_retried_colder_with_a_stricter_instruction():
     assert second_kw["temperature"] < first_kw["temperature"]
     assert "not valid JSON" in second[1]["content"] and "not valid JSON" not in first[1]["content"]
     assert second_kw["max_tokens"] >= first_kw["max_tokens"]
+
+
+def test_judge_temperature_follows_thinking():
+    thinking = RecordingJudge([json.dumps(GOOD)])
+    judge_sample(make_sample(), thinking)  # a client without template kwargs thinks
+    assert thinking.calls[0][1]["temperature"] == 0.6
+    plain = RecordingJudge([json.dumps(GOOD)])
+    plain.template_kwargs = {"enable_thinking": False}
+    judge_sample(make_sample(), plain)
+    assert plain.calls[0][1]["temperature"] == 0.2
 
 
 def test_quick_answer_and_clarify_are_not_penalised_for_not_delegating():
@@ -226,31 +288,6 @@ def test_filter_keeps_the_first_pass_and_adds_retry_wins(tmp_path):
     assert report["retry_rounds"]["retry-1"] == {"judged": 2, "kept": 2}
 
 
-class RoundClient(ScriptedTeacher):
-    """Teacher for tool calls, judge for transcripts, environment for everything else."""
-
-    def chat(self, messages, *, tools=None, **kwargs):
-        if tools is None:
-            if "Transcript" in messages[-1]["content"]:
-                return {"content": json.dumps(GOOD)}
-            return {"content": "report"}
-        return super().chat(messages, tools=tools, **kwargs)
-
-
-def test_retry_rounds_regenerate_rejected_prompts_and_resume(tmp_path):
-    write_prompts(tmp_path / "prompts.jsonl", ["p-0", "p-1"])
-    judged(tmp_path, "p-0", True)
-    judged(tmp_path, "p-1", False)
-    summary = run_retry_rounds(tmp_path, RoundClient(good_script()), rounds=2)
-    assert not summary["stopped"]
-    assert list(summary["rounds"]) == ["retry-1"]  # round 2 had nothing left to retry
-    (kept,) = iter_records(tmp_path / "retry-1" / "judged")
-    assert kept["id"] == "p-1" and kept["meta"]["attempt"] == 1 and kept["meta"]["judge"]["keep"]
-    again = run_retry_rounds(tmp_path, RoundClient([]), rounds=2)  # nothing to redo
-    assert again["rounds"]["retry-1"]["generate"]["todo"] == 0
-    assert done_ids(tmp_path / "retry-1" / "judged") == {"p-1"}
-
-
 def test_judging_a_retry_round_directory_works_like_the_main_one(tmp_path):
     ShardWriter(tmp_path / "retry-1" / "traces", "traces").write(make_sample("p-1"))
     counts = run_judging(tmp_path / "retry-1", RecordingJudge([json.dumps(GOOD)]))
@@ -312,3 +349,52 @@ def test_retry_phase_is_listed_between_judge_and_filter():
     from emperor.pipeline.run import PHASES
 
     assert PHASES.index("judge") + 1 == PHASES.index("retry") == PHASES.index("filter") - 1
+
+
+def test_recorded_model_names_come_from_the_served_gguf():
+    from emperor.data.teacher import model_name
+
+    assert model_name("D:/AI-Models/x/Qwen3.8-27B-UD-Q4_K_XL.gguf") == "Qwen3.8-27B-UD-Q4_K_XL"
+    assert model_name(r"F:\m\gpt-oss-120b-F16.gguf") == "gpt-oss-120b-F16"
+    assert model_name("Qwen3.8-27B") == "Qwen3.8-27B"  # an alias keeps its dots
+
+
+def test_a_context_overflow_is_its_own_reject_reason(monkeypatch, tmp_path):
+    from emperor.data.teacher import TeacherContextError
+
+    monkeypatch.setattr("emperor.data.teacher.time.sleep", lambda _: None)
+    client = ChatClient.__new__(ChatClient)
+    client.base_url, client.model, client.retries = "http://127.0.0.1:1/v1", "m", 3
+    client.reasoning_effort, client.tool_choice_supported = None, True
+    client.slot, client.template_kwargs = None, {}
+
+    class Full:
+        def __init__(self):
+            self.posts = 0
+
+        def post(self, url, json):
+            self.posts += 1
+            return _Response(500, "Context size has been exceeded.")
+
+    client._http = Full()
+    with pytest.raises(TeacherContextError):
+        client.chat(USER)
+    assert client._http.posts == 1  # not retried: the same request cannot fit next time
+
+    class Overflowing(ScriptedTeacher):
+        def chat(self, messages, *, tools=None, **kwargs):
+            if messages[-1].get("role") == "tool":
+                raise TeacherContextError("request exceeds the server's context")
+            return super().chat(messages, tools=tools, **kwargs)
+
+    prompts = tmp_path / "prompts.jsonl"
+    prompts.write_text(json.dumps(record().to_dict()) + "\n", encoding="utf-8")
+    counts = run_generation(
+        prompts,
+        tmp_path,
+        Overflowing(good_script() * 3),
+        FakeEnv(),
+        config=GenerationConfig(retries=0),
+    )
+    (reject,) = iter_records(tmp_path / "rejects")
+    assert counts["rejected"] == 1 and reject["reason"] == "context_exceeded"

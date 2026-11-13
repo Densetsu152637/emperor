@@ -5,10 +5,14 @@ a hosted API. The teacher is Apache-2.0 licensed; every sample records that.
 """
 
 import json
+import re
 import time
+from pathlib import Path, PurePath
 from urllib.parse import urlparse
 
-TEACHER_MODEL = "gpt-oss-20b"
+TEACHER_MODEL = "gpt-oss-120b"
+# The judge is a different model family, so the teacher does not grade its own traces.
+JUDGE_MODEL = "Qwen3.8-27B"
 TEACHER_LICENCE = "Apache-2.0"
 _LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
 
@@ -16,6 +20,18 @@ _LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
 class TeacherOutputError(RuntimeError):
     """The server is up but rejected what the model produced (llama.cpp answers 500 when the
     output does not parse as the chat format): one bad sample, not a dead server."""
+
+
+class TeacherContextError(TeacherOutputError):
+    """The request did not fit the server's context (prompt plus reply, or a full KV cache).
+    Retrying the same request cannot help, so it is not retried, and it is reported as its own
+    reject reason instead of passing for an unparsable output."""
+
+
+# What llama-server says when a request outgrows the context or the KV cache.
+_CONTEXT_ERROR = re.compile(
+    r"exceed_context|context size|context length|kv size|kv cache|n_ctx", re.IGNORECASE
+)
 
 
 class TeacherSetupError(RuntimeError):
@@ -37,12 +53,27 @@ def require_local(base_url: str) -> str:
     return base_url.rstrip("/")
 
 
-# Generation runs the teacher at low effort: its reasoning is stored and trained on, and short
-# reasoning keeps traces within the student's training length. Judging keeps medium.
-GENERATE_EFFORT = "low"
+# Generation runs the teacher at medium effort: its reasoning is stored and trained on. In the
+# pilot, low effort gave about 6 tokens of reasoning a turn, too little to learn from; medium
+# gave about 360 and still kept every sample under 8192 tokens.
+GENERATE_EFFORT = "medium"
 JUDGE_EFFORT = "medium"
 ENVIRONMENT_EFFORT = "medium"  # the tool-result simulator: its output is context, not trained
 EFFORTS = ("low", "medium", "high")
+
+
+def model_name(gguf: str | Path) -> str:
+    """The name recorded for a served GGUF: its file name without the extension, so a sample
+    names the exact weights and quantisation that produced or judged it."""
+    name = PurePath(str(gguf).replace("\\", "/")).name
+    return name[: -len(".gguf")] if name.lower().endswith(".gguf") else name
+
+
+def _error_text(response) -> str:
+    try:
+        return response.text if response is not None else ""
+    except Exception:  # a streamed or closed body
+        return ""
 
 
 class ChatClient:
@@ -54,9 +85,13 @@ class ChatClient:
         base_url: str,
         model: str = TEACHER_MODEL,
         *,
-        timeout: float = 900.0,
+        # A cold 120B teacher pages its experts in from disk: its first request has taken from
+        # 25 minutes to over an hour; later ones take seconds.
+        timeout: float = 10800.0,
         retries: int = 3,
         reasoning_effort: str | None = GENERATE_EFFORT,
+        slot: int | None = None,
+        template_kwargs: dict | None = None,
     ):
         import httpx  # the `data` dependency group; imported lazily to keep the core light
 
@@ -64,6 +99,10 @@ class ChatClient:
         self.model = model
         self.retries = retries
         self.reasoning_effort = reasoning_effort
+        # A fixed llama-server slot per role (teacher, tool simulator) keeps each role's
+        # prompt cached, instead of reprocessing it whenever the other role ran.
+        self.slot = slot
+        self.template_kwargs = dict(template_kwargs or {})
         self._http = httpx.Client(timeout=timeout)
         self.tool_choice_supported = True  # cleared once the server rejects `tool_choice`
 
@@ -92,8 +131,13 @@ class ChatClient:
             body["tools"] = tools
             if tool_choice and self.tool_choice_supported:
                 body["tool_choice"] = tool_choice
+        kwargs = dict(self.template_kwargs)
         if self.reasoning_effort:
-            body["chat_template_kwargs"] = {"reasoning_effort": self.reasoning_effort}
+            kwargs["reasoning_effort"] = self.reasoning_effort
+        if kwargs:
+            body["chat_template_kwargs"] = kwargs
+        if self.slot is not None:
+            body["id_slot"] = self.slot
         last: Exception | None = None
         server_rejected = 0
         for attempt in range(self.retries):
@@ -105,18 +149,43 @@ class ChatClient:
                 last = error
             except Exception as error:  # httpx errors; kept broad so one blip does not kill a run
                 last = error
-                status = getattr(getattr(error, "response", None), "status_code", None)
-                if "tool_choice" in body and status in (400, 422, 501):
+                response = getattr(error, "response", None)
+                status = getattr(response, "status_code", None)
+                if (
+                    "tool_choice" in body
+                    and status in (400, 422, 501)
+                    and "tool_choice" in _error_text(response)
+                ):
                     # The server cannot force a tool call: stop asking and carry on without.
+                    # Only when it says so: any other 400 (an over-long prompt, a bad message)
+                    # would otherwise switch forcing off for the rest of a multi-day run.
                     self.tool_choice_supported = False
                     del body["tool_choice"]
                     continue
+                if (
+                    status is not None
+                    and status >= 400
+                    and _CONTEXT_ERROR.search(_error_text(response))
+                ):
+                    raise TeacherContextError(
+                        f"request exceeds the server's context: {_error_text(response)[:300]}"
+                    ) from error
                 if status is not None and status >= 500:
                     server_rejected += 1
             time.sleep(min(2**attempt, 10))
         if server_rejected == self.retries:
             raise TeacherOutputError(f"server rejected the output {self.retries} times: {last}")
         raise TeacherError(f"teacher request failed after {self.retries} tries: {last}")
+
+    def served_model(self) -> str | None:
+        """The model the server reports at /v1/models (llama-server gives the GGUF path or its
+        alias), as `model_name` records it; None when the server does not say."""
+        try:
+            response = self._http.get(f"{self.base_url}/models")
+            response.raise_for_status()
+            return model_name(response.json()["data"][0]["id"])
+        except Exception:
+            return None
 
     def wait_until_ready(self, seconds: float = 300.0) -> bool:
         """Poll the server's /health until it reports ready; False on timeout."""

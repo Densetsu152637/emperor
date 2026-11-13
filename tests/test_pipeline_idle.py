@@ -166,6 +166,29 @@ def test_run_gated_stops_after_repeated_failures():
     assert result["status"] == "failed" and "server crashed" in result["error"]
 
 
+def test_run_gated_forgives_failures_after_progress():
+    g = gate(idle=3600, gpu=0.0)
+    runs = {"n": 0}
+
+    def work(resource, should_stop):
+        # Every run gets work done and then loses its server; the sixth finishes.
+        runs["n"] += 1
+        if runs["n"] < 6:
+            return {"stopped": True, "error": "server died", "accepted": 3}
+        return {"stopped": False, "accepted": 1}
+
+    result = run_gated(
+        gate=g,
+        quit_flag=lambda: False,
+        start=lambda: object(),
+        stop=lambda r: None,
+        work=work,
+        sleep=lambda s: None,
+        max_failures=2,
+    )
+    assert result["status"] == "done" and runs["n"] == 6
+
+
 def test_run_gated_quits_without_starting_when_asked():
     g = gate(idle=0, gpu=0.0)
     started = []
@@ -209,3 +232,39 @@ def test_monitor_stops_the_resource_mid_request_when_the_user_returns():
         monitor_seconds=0.01,
     )
     assert result["status"] == "done" and result["pauses"] == 1
+
+
+def test_teacher_and_judge_run_on_their_own_servers(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from emperor.pipeline.processes import OwnProcesses
+    from emperor.pipeline.run import (
+        DEFAULT_JUDGE_GGUF,
+        DEFAULT_TEACHER_GGUF,
+        TEACHER_SERVER_ARGS,
+        Pipeline,
+        Settings,
+    )
+
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "prompts.jsonl").write_text('{"id": "p-1"}\n', encoding="utf-8")
+    from emperor.data.shards import ShardWriter
+
+    ShardWriter(data / "traces", "traces").write({"id": "p-0", "messages": []})
+    pipeline = Pipeline(
+        Settings(root=tmp_path, run_dir=tmp_path, data_dir=data), None, OwnProcesses()
+    )
+    calls = []
+
+    def fake_server_phase(
+        name, gguf, port, context, work, parallel=None, extra_args=None, vram_margin_mib=1536
+    ):
+        calls.append((name, str(gguf), parallel, extra_args))
+        return {"status": "done"}
+
+    monkeypatch.setattr(pipeline, "_server_phase", fake_server_phase)
+    pipeline.phase_generate()
+    pipeline.phase_judge()
+    assert calls[0] == ("generate", str(Path(DEFAULT_TEACHER_GGUF)), 2, TEACHER_SERVER_ARGS)
+    assert calls[1] == ("judge", str(Path(DEFAULT_JUDGE_GGUF)), 1, None)

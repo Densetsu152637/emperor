@@ -241,6 +241,10 @@ def render_card(inputs: CardInputs, kind: str) -> str:
         "",
         f"{r.license}, the licence of the base model. The teacher's licence ({r.teacher_licence}) "
         "permits using its outputs for training.",
+    ]
+    if r.teacher_policy:
+        parts.append(r.teacher_policy)
+    parts += [
         "",
     ]
     return "\n".join(parts)

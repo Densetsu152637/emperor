@@ -59,15 +59,17 @@ Phases (`--skip <phase>` skips one; every phase is resumable):
    clarify, docs, architecture, long input and quick answers, from vague to specific. Each
    candidate is checked against `tasks/heldout`, `tasks/e2e` and `tasks/longctx` with a 3-gram
    overlap test (Jaccard similarity or containment of 0.4 or more is dropped).
-2. **generate**: gpt-oss-20b (Apache-2.0, `D:\AI-Models\unsloth\gpt-oss-20b-GGUF`) served by
+2. **generate**: gpt-oss-120b (Apache-2.0, F16 GGUF in `F:\AI-Models\unsloth\gpt-oss-120b-GGUF`) served by
    `llama-server` plays Emperor with `emperor-root.md`, the brief/plan/question shapes and the
    target style: concise and structured, big picture first, delegates instead of pasting code,
    few emojis, no walls of tables, searches instead of recalling facts, never handles
    credentials. A separate "environment" call simulates the tool results. The stored sample keeps
    only the plain Emperor prompt, so the style is learned rather than instructed. Each assistant
-   turn keeps the teacher's reasoning for it as `reasoning_content`; the teacher runs at low
-   reasoning effort (`--reasoning-effort`) to keep traces short.
-3. **judge**: the same model (at `--judge-reasoning-effort`, default medium) scores each trace 1-5 on eight criteria and answers pass or fail as
+   turn keeps the teacher's reasoning for it as `reasoning_content`; the teacher runs at medium
+   reasoning effort (`--reasoning-effort`); only the first turn of a trace must carry reasoning.
+3. **judge**: Qwen3.8-27B (`--judge-gguf`; a different family, so the teacher never grades its own
+   traces; thinking on unless `--no-judge-thinking`) on its own llama-server, never beside the
+   teacher, scores each trace 1-5 on eight criteria and answers pass or fail as
    JSON. A trace is kept when the judge passes it, the mean is at least 4.0 (`--threshold`), no
    criterion is below 3, and the emoji, table and pasted-code checks are clean. Schema checks run
    first: tool calls validate against the vendored schemas, roles alternate, briefs have Goal and
@@ -75,7 +77,7 @@ Phases (`--skip <phase>` skips one; every phase is resumable):
    patterns).
 4. **filter**: writes `data/final/final.jsonl` and `data/report.json` (counts, pass rate, score
    histograms, rejection reasons).
-5. **train**: `configs/sft.toml`, bf16 LoRA on `D:\AI-Models\Qwen\Qwen3.5-4B` (Apache-2.0;
+5. **train**: `configs/sft.toml`, bf16 LoRA on `F:\AI-Models\Qwen\Qwen3.5-4B` (Apache-2.0;
    the text model only, without the vision encoder or the multi-token-prediction head) with TRL,
    gradient checkpointing, assistant-only loss (the teacher's reasoning, rendered as the
    template's `<think>` block, is trained too; samples without reasoning are skipped and counted
@@ -108,7 +110,8 @@ Phases (`--skip <phase>` skips one; every phase is resumable):
   `meta.attempt_failures` record it. The new **retry** phase (after judge) regenerates prompts the
   judge rejected into `data/retry-1/`, `data/retry-2/` (same layout, new seeds) and judges them;
   the first pass is never overwritten and `filter` keeps the earliest kept sample per prompt.
-  `--retries 0` turns both off. Standalone: `data retry`.
+  `--retries 0` turns both off. Retry rounds run only inside `pipeline`, which generates
+  and judges each round in separate server phases (one model at a time).
 - **Judge.** An unparseable answer is retried once, colder and with a stricter JSON instruction.
   Criteria that cannot apply are ignored for `quick_answer` (delegation, tool use, research,
   planning) and `clarify` (delegation, research); the judge prompt says so too.
@@ -130,7 +133,7 @@ uv run --group train pipeline --detach --resume runs/<timestamp> --only export -
 ```
 
 Samples are append-only JSONL shards under `data/` (`traces/`, `rejects/`, `judged/`, `final/`).
-Each records its teacher (`gpt-oss-20b`), licence (`Apache-2.0`), seed and judge scores. The
+Each records its teacher (`gpt-oss-120b`), its judge model, licence (`Apache-2.0`), seed and judge scores. The
 steps can also be run alone: `uv run --group data data {prompts,generate,judge,retry,filter,report,validate}`
 and `uv run --group train train {show,fit,merge}`.
 
