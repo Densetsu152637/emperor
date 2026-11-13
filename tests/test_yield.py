@@ -430,3 +430,21 @@ def test_a_too_long_trace_is_not_tried_again(tmp_path):
     (reject,) = iter_records(tmp_path / "rejects")
     assert counts["rejected"] == 1 and reject["attempt_failures"] == ["too_long"]
     assert prepare_round(tmp_path, 1) == 0  # no retry round for a long task either
+
+
+def test_a_higher_length_limit_tries_earlier_too_long_tasks_again(tmp_path):
+    prompts = tmp_path / "prompts.jsonl"
+    write_prompts(prompts, ["p-0"])
+    short = GenerationConfig(max_sample_tokens=10)
+    long_call = tool_turn("spawn_agent", {"brief": BRIEF, "tier": "standard"})
+    run_generation(prompts, tmp_path, ScriptedTeacher([long_call] * 3), FakeEnv(), config=short)
+    (reject,) = iter_records(tmp_path / "rejects")
+    assert reject["reason"] == "too_long" and reject["max_sample_tokens"] == 10
+    # The same limit again: done. A higher one: the task is generated again and now fits.
+    again = run_generation(prompts, tmp_path, ScriptedTeacher([]), FakeEnv(), config=short)
+    assert again["todo"] == 0
+    longer = GenerationConfig(max_sample_tokens=16384)
+    counts = run_generation(
+        prompts, tmp_path, ScriptedTeacher(good_script()), FakeEnv(), config=longer
+    )
+    assert counts["todo"] == 1 and counts["accepted"] == 1

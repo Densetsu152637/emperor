@@ -43,6 +43,10 @@ from emperor.data.records import current, exclude_pilot, exclusions, fingerprint
 from emperor.data.teacher import TeacherError, TeacherSetupError
 
 log = logging.getLogger("emperor.hosted")
+# Long multi-subagent traces are what Emperor exists to learn, so they are kept: training may
+# offload to RAM. Two too-long pilot traces measured 8.7K and 9.7K tokens without the old 8,192
+# cap; 16,384 keeps them with room, and still rejects a runaway trace.
+MAX_SAMPLE_TOKENS = 16384
 STATUS_SECONDS = 30.0
 
 
@@ -229,6 +233,7 @@ class HostedRun:
             host=self.host,
             licence=self.licence,
             attempt=attempt,
+            max_sample_tokens=self.args.max_sample_tokens,
             provenance=self.provenance(),
         )
 
@@ -425,6 +430,12 @@ def build_parser(prog: str = "hosted") -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--retries", type=int, default=2, help="extra tries and retry rounds")
     parser.add_argument("--threshold", type=float, default=4.0, help="minimum mean judge score")
+    parser.add_argument(
+        "--max-sample-tokens",
+        type=int,
+        default=MAX_SAMPLE_TOKENS,
+        help="reject a trace once it passes this length (the training length; default %(default)s)",
+    )
     parser.add_argument("--workers", type=int, help="parallel tasks (default: the provider's)")
     parser.add_argument("--judge-workers", type=int, help="parallel judgements")
     hours = parser.add_mutually_exclusive_group()

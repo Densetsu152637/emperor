@@ -557,6 +557,16 @@ def _sample_with_retries(
     return None, reason, failures
 
 
+LEGACY_SAMPLE_LIMIT = 8192  # the limit of rejects recorded before the limit was stored
+
+
+def too_long_under_lower_limit(reject: dict, limit: int | None) -> bool:
+    if reject.get("reason") != "too_long":
+        return False
+    was = reject.get("max_sample_tokens") or LEGACY_SAMPLE_LIMIT
+    return limit is None or was < limit
+
+
 def run_generation(
     prompts_path: Path,
     out_dir: Path,
@@ -578,8 +588,15 @@ def run_generation(
     config = config or GenerationConfig()
     traces = ShardWriter(out_dir / "traces", "traces")
     rejects = ShardWriter(out_dir / "rejects", "rejects")
-    # The latest record per id counts, and an excluded pilot's tasks are done again.
-    finished = set(current(out_dir / "traces")) | set(current(out_dir / "rejects"))
+    # The latest record per id counts, and an excluded pilot's tasks are done again. A task
+    # rejected as too_long under a lower length limit than this run's is tried again: those
+    # traces were cut off when they passed the old limit, so they cannot be re-admitted as is.
+    still_rejected = {
+        i
+        for i, r in current(out_dir / "rejects").items()
+        if not too_long_under_lower_limit(r, config.max_sample_tokens)
+    }
+    finished = set(current(out_dir / "traces")) | still_rejected
     todo = [PromptRecord(**r) for r in read_jsonl(prompts_path) if r["id"] not in finished]
     if limit is not None:
         todo = todo[:limit]
@@ -610,6 +627,7 @@ def run_generation(
                     "reason": reason,
                     "attempts": len(failures),
                     "attempt_failures": failures,
+                    "max_sample_tokens": config.max_sample_tokens,
                     **config.provenance,
                 }
             )
