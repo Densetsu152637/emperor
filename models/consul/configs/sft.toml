@@ -2,13 +2,14 @@
 # Paths are relative to the repository root unless absolute. The base is read-only.
 
 [model]
-base = "F:/AI-Models/Qwen/Qwen3.5-4B"
+base = "F:/AI-Models/Qwen/Qwen3.5-9B"  # a bigger base than Emperor's 4B, so the critic does not share all of the planner's blind spots
 attn_implementation = "sdpa"  # flash-attn has no Windows wheel
 
 [data]
 path = "data/final/final.jsonl"
 max_length = 8192  # prompt + teacher reasoning + critique; longer samples are dropped, not cut
-# (Emperor's measurement on Qwen3.5-4B with the Triton kernels: 13.0 GiB peak, 4.3 s a step)
+# The full run sets the length from the data. The 9B's bf16 weights (~18 GB) exceed the 16 GB GPU,
+# so training needs the partial-GPU (offload) path.
 val_fraction = 0.05
 split_seed = 1337
 
@@ -43,10 +44,10 @@ seed = 1337
 
 [merge]
 adapter_dir = "outputs/sft/adapter"
-output_dir = "weights/consul-4b-bf16"
+output_dir = "weights/consul-9b-bf16"
 
 [release]
-name = "consul-4b"  # weights/consul-4b-gguf/, consul-4b-<TYPE>.gguf
+name = "consul-9b"  # weights/consul-9b-gguf/, consul-9b-<TYPE>.gguf
 title = "Consul"
 summary = """Consul is an open-weight critic for Imperium. Given a plan, a diff or an agent \
 report, it reasons in a thinking block, then returns ranked findings (location, impact, \
@@ -60,7 +61,7 @@ intended_use = [
   "Running on the CPU lane (a quantised GGUF) while the GPU serves another model.",
 ]
 limits = [
-  "A 4B model: findings are heuristics and need the author's triage, not blind trust.",
+  "A 9B model: findings are heuristics and need the author's triage, not blind trust.",
   "Trained and scored on synthetic artifacts with seeded defects; real-world recall is untested.",
   "It cites only the sources it is given and cannot search the web by itself in this version.",
   "Delta-review loops (goal C4) are not yet trained or evaluated.",

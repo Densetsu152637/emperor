@@ -6,7 +6,7 @@ Training, evaluation, and export for **Consul**, an open-weight critic model for
 given a plan, a diff or an agent report, it returns ranked findings (location, impact,
 confidence, fix or check) and a verdict in a strict JSON result schema.
 
-The base is **Qwen3.5-4B** (Apache-2.0, thinking on by default; only its text model is trained), trained with a **bf16 LoRA** (no QLoRA, no
+The base is **Qwen3.5-9B** (Apache-2.0, thinking on by default; only its text model is trained), trained with a **bf16 LoRA** (no QLoRA, no
 4/8-bit) and quantised only after training, so it runs on the CPU from system RAM, on the GPU,
 or split between them. Consul thinks before it critiques: each training sample keeps the
 teacher's reasoning as `reasoning_content` on the assistant turn (Emperor's trainer renders it
@@ -26,7 +26,7 @@ as the `<think>` block), and the eval removes the thinking before it scores the 
 | `src/consul/score.py`, `overlap.py` | Scoring a critique against ground truth; held-out vs training overlap |
 | `src/consul/eval/` | The held-out harness: C1 (recall, false findings), C3 (format), C2 (citations) |
 | `src/consul/pipeline/` | The idle-gated pipeline, a subclass of Emperor's |
-| `configs/sft.toml` | The training recipe and release text (output `weights/consul-4b-bf16/`) |
+| `configs/sft.toml` | The training recipe and release text (output `weights/consul-9b-bf16/`) |
 | `data/`, `runs/`, `outputs/`, `weights/`, `tools/` | Generated locally and ignored by Git |
 
 Training, merge, GGUF export, model cards and the guarded publish are
