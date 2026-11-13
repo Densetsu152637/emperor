@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from conftest import make_sample
 from test_data_generate import FakeEnv, ScriptedTeacher, good_script, record, tool_turn
 
@@ -14,7 +15,7 @@ from emperor.data.retry import prepare_round, retry_dirs, run_retry_rounds
 from emperor.data.schema import table_rows
 from emperor.data.shards import ShardWriter, done_ids, iter_records
 from emperor.data.style import STYLE, judge_system
-from emperor.data.teacher import ChatClient
+from emperor.data.teacher import ChatClient, TeacherError
 from emperor.train.config import load_config, parse_config
 from emperor.train.data import load_combined
 
@@ -84,8 +85,9 @@ def test_style_forbids_tables_and_demands_tools_first():
 
 
 class _Response:
-    def __init__(self, status=200):
+    def __init__(self, status=200, text=""):
         self.status_code = status
+        self.text = text
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -98,13 +100,16 @@ class _Response:
 
 
 class _Http:
-    def __init__(self, reject_tool_choice):
+    def __init__(self, reject_tool_choice, message="tool_choice is not supported"):
         self.bodies = []
         self.reject = reject_tool_choice
+        self.message = message
 
     def post(self, url, json):
         self.bodies.append(dict(json))
-        return _Response(400 if self.reject and "tool_choice" in json else 200)
+        if self.reject and "tool_choice" in json:
+            return _Response(400, self.message)
+        return _Response(200)
 
 
 def test_client_sends_tool_choice_and_falls_back_when_the_server_rejects_it():
@@ -136,6 +141,19 @@ def test_client_sends_tool_choice_and_falls_back_when_the_server_rejects_it():
     assert not client.tool_choice_supported
     client.chat(USER, tools=TOOLS, tool_choice="required")
     assert "tool_choice" not in client._http.bodies[-1]
+
+
+def test_an_unrelated_400_keeps_forced_tool_calls(monkeypatch):
+    monkeypatch.setattr("emperor.data.teacher.time.sleep", lambda _: None)
+    client = ChatClient.__new__(ChatClient)
+    client.base_url, client.model, client.retries = "http://127.0.0.1:1/v1", "m", 2
+    client.reasoning_effort, client.tool_choice_supported = None, True
+    client.slot, client.template_kwargs = None, {}
+    client._http = _Http(reject_tool_choice=True, message="the request exceeds the context")
+    with pytest.raises(TeacherError):
+        client.chat(USER, tools=TOOLS, tool_choice="required")
+    assert client.tool_choice_supported
+    assert all(body.get("tool_choice") == "required" for body in client._http.bodies)
 
 
 # -- rejection sampling ------------------------------------------------------------------------

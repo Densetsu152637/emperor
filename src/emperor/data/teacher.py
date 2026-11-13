@@ -48,6 +48,13 @@ ENVIRONMENT_EFFORT = "medium"  # the tool-result simulator: its output is contex
 EFFORTS = ("low", "medium", "high")
 
 
+def _error_text(response) -> str:
+    try:
+        return response.text if response is not None else ""
+    except Exception:  # a streamed or closed body
+        return ""
+
+
 class ChatClient:
     """Chat completions against a local llama-server. `chat` returns the response message,
     with the reasoning in `reasoning_content` and the answer in `content`."""
@@ -121,9 +128,16 @@ class ChatClient:
                 last = error
             except Exception as error:  # httpx errors; kept broad so one blip does not kill a run
                 last = error
-                status = getattr(getattr(error, "response", None), "status_code", None)
-                if "tool_choice" in body and status in (400, 422, 501):
+                response = getattr(error, "response", None)
+                status = getattr(response, "status_code", None)
+                if (
+                    "tool_choice" in body
+                    and status in (400, 422, 501)
+                    and "tool_choice" in _error_text(response)
+                ):
                     # The server cannot force a tool call: stop asking and carry on without.
+                    # Only when it says so: any other 400 (an over-long prompt, a bad message)
+                    # would otherwise switch forcing off for the rest of a multi-day run.
                     self.tool_choice_supported = False
                     del body["tool_choice"]
                     continue
