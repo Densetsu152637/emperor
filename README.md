@@ -110,7 +110,8 @@ Phases (`--skip <phase>` skips one; every phase is resumable):
   `meta.attempt_failures` record it. The new **retry** phase (after judge) regenerates prompts the
   judge rejected into `data/retry-1/`, `data/retry-2/` (same layout, new seeds) and judges them;
   the first pass is never overwritten and `filter` keeps the earliest kept sample per prompt.
-  `--retries 0` turns both off. Standalone: `data retry`.
+  `--retries 0` turns both off. Retry rounds run only inside `pipeline`, which generates
+  and judges each round in separate server phases (one model at a time).
 - **Judge.** An unparseable answer is retried once, colder and with a stricter JSON instruction.
   Criteria that cannot apply are ignored for `quick_answer` (delegation, tool use, research,
   planning) and `clarify` (delegation, research); the judge prompt says so too.

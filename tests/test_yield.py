@@ -11,9 +11,9 @@ from emperor.data.build import build_report, filter_kept
 from emperor.data.generate import GenerationConfig, generate_trace, run_generation
 from emperor.data.judge import JudgeResult, decide, judge_sample, run_judging
 from emperor.data.prompts import normalise
-from emperor.data.retry import prepare_round, retry_dirs, run_retry_rounds
+from emperor.data.retry import prepare_round, retry_dirs
 from emperor.data.schema import table_rows
-from emperor.data.shards import ShardWriter, done_ids, iter_records
+from emperor.data.shards import ShardWriter, iter_records
 from emperor.data.style import STYLE, judge_system
 from emperor.data.teacher import ChatClient, TeacherError
 from emperor.train.config import load_config, parse_config
@@ -286,31 +286,6 @@ def test_filter_keeps_the_first_pass_and_adds_retry_wins(tmp_path):
     report = build_report(tmp_path)
     assert report["kept"] == 1 and report["kept_with_retries"] == 3
     assert report["retry_rounds"]["retry-1"] == {"judged": 2, "kept": 2}
-
-
-class RoundClient(ScriptedTeacher):
-    """Teacher for tool calls, judge for transcripts, environment for everything else."""
-
-    def chat(self, messages, *, tools=None, **kwargs):
-        if tools is None:
-            if "Transcript" in messages[-1]["content"]:
-                return {"content": json.dumps(GOOD)}
-            return {"content": "report"}
-        return super().chat(messages, tools=tools, **kwargs)
-
-
-def test_retry_rounds_regenerate_rejected_prompts_and_resume(tmp_path):
-    write_prompts(tmp_path / "prompts.jsonl", ["p-0", "p-1"])
-    judged(tmp_path, "p-0", True)
-    judged(tmp_path, "p-1", False)
-    summary = run_retry_rounds(tmp_path, RoundClient(good_script()), rounds=2)
-    assert not summary["stopped"]
-    assert list(summary["rounds"]) == ["retry-1"]  # round 2 had nothing left to retry
-    (kept,) = iter_records(tmp_path / "retry-1" / "judged")
-    assert kept["id"] == "p-1" and kept["meta"]["attempt"] == 1 and kept["meta"]["judge"]["keep"]
-    again = run_retry_rounds(tmp_path, RoundClient([]), rounds=2)  # nothing to redo
-    assert again["rounds"]["retry-1"]["generate"]["todo"] == 0
-    assert done_ids(tmp_path / "retry-1" / "judged") == {"p-1"}
 
 
 def test_judging_a_retry_round_directory_works_like_the_main_one(tmp_path):

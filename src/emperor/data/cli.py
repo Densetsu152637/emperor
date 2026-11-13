@@ -11,7 +11,7 @@ from pathlib import Path
 
 from emperor.data.build import filter_kept, write_report
 from emperor.data.prompts import HeldoutIndex, generate_prompts, normalise
-from emperor.data.retry import DEFAULT_RETRIES, run_retry_rounds
+from emperor.data.retry import DEFAULT_RETRIES
 from emperor.data.schema import validate_sample
 from emperor.data.shards import iter_records, read_jsonl
 from emperor.data.teacher import EFFORTS, ENVIRONMENT_EFFORT, GENERATE_EFFORT, JUDGE_EFFORT
@@ -29,15 +29,17 @@ def build_parser() -> argparse.ArgumentParser:
     prompts.add_argument("--count", type=int, default=2000)
     prompts.add_argument("--seed", type=int, default=1)
 
+    # No standalone retry command: a retry round generates with the teacher and judges with a
+    # different model, and only one model may run at a time. `pipeline` runs the rounds as
+    # separate teacher and judge phases.
     for name, text in (
         ("generate", "teacher traces"),
         ("judge", "score traces"),
-        ("retry", "regenerate and rejudge the prompts that were rejected"),
     ):
         p = sub.add_parser(name, help=f"{text} against a local llama-server")
         p.add_argument("--base-url", default=DEFAULT_BASE_URL)
         p.add_argument("--limit", type=int)
-        if name in ("generate", "retry"):
+        if name == "generate":
             p.add_argument(
                 "--reasoning-effort",
                 default=GENERATE_EFFORT,
@@ -61,13 +63,9 @@ def build_parser() -> argparse.ArgumentParser:
                 action="store_true",
                 help="do not send tool_choice=required on the first turn",
             )
-        if name in ("judge", "retry"):
+        if name == "judge":
             p.add_argument("--threshold", type=float, default=4.0)
             p.add_argument("--judge-reasoning-effort", default=JUDGE_EFFORT, choices=EFFORTS)
-            p.add_argument(
-                "--judge-base-url",
-                help="the judge's server (a different model from the teacher); default --base-url",
-            )
             p.add_argument(
                 "--no-judge-thinking",
                 action="store_true",
@@ -126,39 +124,11 @@ def generation_config(args):
     return GenerationConfig(retries=args.retries, force_first_tool=not args.no_force_tool)
 
 
-def cmd_retry(args) -> int:
-    from emperor.data.teacher import ChatClient, TeacherSetupError
-
-    client = ChatClient(args.base_url, reasoning_effort=args.reasoning_effort)
-    judge_client = judge_chat_client(args)
-    environment = ChatClient(args.base_url, reasoning_effort=args.environment_reasoning_effort)
-    try:
-        counts = run_retry_rounds(
-            args.data_dir,
-            client,
-            judge_client=judge_client,
-            environment_client=environment,
-            rounds=args.retries,
-            config=generation_config(args),
-            threshold=args.threshold,
-            log=lambda line: print(line, file=sys.stderr),
-        )
-    except TeacherSetupError as error:
-        print(f"retry: {error}", file=sys.stderr)
-        return 2
-    finally:
-        client.close()
-        judge_client.close()
-        environment.close()
-    print(json.dumps(counts))
-    return 0
-
-
 def judge_chat_client(args):
     from emperor.data.teacher import JUDGE_MODEL, ChatClient
 
     return ChatClient(
-        args.judge_base_url or args.base_url,
+        args.base_url,
         model=JUDGE_MODEL,
         reasoning_effort=args.judge_reasoning_effort,
         template_kwargs={"enable_thinking": not args.no_judge_thinking},
@@ -206,8 +176,6 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_generate(args)
     if args.command == "judge":
         return cmd_judge(args)
-    if args.command == "retry":
-        return cmd_retry(args)
     if args.command == "filter":
         print(json.dumps(filter_kept(args.data_dir)))
         return 0

@@ -271,9 +271,8 @@ def test_generation_defaults_to_low_reasoning_effort():
     from emperor.data.cli import build_parser
     from emperor.data.teacher import ChatClient
 
-    args = build_parser().parse_args(["retry"])
-    assert (args.reasoning_effort, args.judge_reasoning_effort) == ("medium", "medium")
-    assert args.environment_reasoning_effort == "medium"
+    args = build_parser().parse_args(["generate"])
+    assert (args.reasoning_effort, args.environment_reasoning_effort) == ("medium", "medium")
     assert build_parser().parse_args(["judge"]).judge_reasoning_effort == "medium"
     assert ChatClient.__init__.__kwdefaults__["reasoning_effort"] == "medium"
 

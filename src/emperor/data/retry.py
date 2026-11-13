@@ -2,22 +2,17 @@
 
 Round `k` lives in `<data_dir>/retry-k/` with the same layout as the main directory (prompts,
 traces, rejects, judged), so generation, judging and resuming are the same code. The first pass
-is never touched: a prompt is kept from the earliest round that produced a kept sample.
+is never touched: a prompt is kept from the earliest round that produced a kept sample. The
+pipeline runs each round as a teacher phase and then a judge phase, one model at a time.
 """
 
-import dataclasses
 import json
-from collections.abc import Callable
 from pathlib import Path
 
 from emperor.data.generate import (
     ROUND_SEED_STEP,
     SEED_MASK,
-    Chat,
-    GenerationConfig,
-    run_generation,
 )
-from emperor.data.judge import MEAN_THRESHOLD, run_judging
 from emperor.data.shards import done_ids, iter_records, read_jsonl
 
 DEFAULT_RETRIES = 2
@@ -78,59 +73,3 @@ def prepare_round(data_dir: Path, k: int) -> int:
     tmp.write_text("".join(line + "\n" for line in lines), encoding="utf-8", newline="\n")
     tmp.replace(target)
     return len(lines)
-
-
-def run_retry_rounds(
-    data_dir: Path,
-    client: Chat,
-    *,
-    judge_client: Chat | None = None,
-    environment_client: Chat | None = None,
-    rounds: int = DEFAULT_RETRIES,
-    config: GenerationConfig | None = None,
-    threshold: float = MEAN_THRESHOLD,
-    should_stop: Callable[[], bool] = lambda: False,
-    log: Callable[[str], None] = lambda _: None,
-) -> dict:
-    """Regenerate and rejudge the prompts that failed, up to `rounds` times. Resumable.
-
-    `judge_client` and `environment_client` (default: `client`) judge and simulate tool
-    results, so each can run at its own reasoning effort.
-
-    Returns counts per round plus `stopped` (and `error`) when the server went away or the
-    caller asked to stop; calling again continues where it left off.
-    """
-    base = config or GenerationConfig()
-    summary: dict = {"rounds": {}, "stopped": False}
-    for k in range(1, rounds + 1):
-        count = prepare_round(data_dir, k)
-        if count == 0:
-            break
-        directory = round_dir(data_dir, k)
-        generated = run_generation(
-            directory / "prompts.jsonl",
-            directory,
-            client,
-            environment_client,
-            config=dataclasses.replace(base, attempt=k),
-            should_stop=should_stop,
-            log=log,
-        )
-        judged = {"stopped": False}
-        if not generated["stopped"]:
-            judged = run_judging(
-                directory,
-                judge_client or client,
-                threshold=threshold,
-                should_stop=should_stop,
-                log=log,
-            )
-        summary["rounds"][f"retry-{k}"] = {"prompts": count, "generate": generated, "judge": judged}
-        for part in (generated, judged):
-            if part.get("stopped"):
-                summary["stopped"] = True
-                if "error" in part:
-                    summary["error"] = part["error"]
-        if summary["stopped"]:
-            break
-    return summary
