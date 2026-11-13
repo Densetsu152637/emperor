@@ -447,7 +447,7 @@ class HostedClient:
     def _backoff(attempt: int, retry_after: float | None) -> float:
         if retry_after is not None:
             return min(retry_after, 300.0)
-        return min(2.0**attempt, 60.0) * (0.5 + random.random())
+        return min(2.0**attempt, 120.0) * (0.5 + random.random())
 
 
 def _safe_text(response) -> str:

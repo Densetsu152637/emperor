@@ -118,7 +118,8 @@ def test_kimi_judge_gets_no_sampling_parameters_and_no_thinking_field():
     judge.chat([{"role": "user", "content": "x"}], temperature=0.6, max_tokens=8192)
     body = http.posts[0]["json"]
     assert "temperature" not in body and "thinking" not in body
-    assert body["reasoning_effort"] == "high" and body["model"] == "kimi-k3.1-pro"
+    assert body["reasoning_effort"] == CONFIG.roles["judge"].reasoning_effort
+    assert body["model"] == "kimi-k3.1-pro"
     assert http.posts[0]["url"] == "https://api.moonshot.ai/v1/chat/completions"
 
 

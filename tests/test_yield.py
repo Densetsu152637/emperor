@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import make_sample
+from conftest import BRIEF, make_sample
 from test_data_generate import FakeEnv, ScriptedTeacher, good_script, record, tool_turn
 
 from emperor.data.build import build_report, filter_kept
@@ -415,3 +415,18 @@ def test_generation_and_judging_run_several_prompts_at_once(tmp_path):
     assert counts["accepted"] == 6 and done_ids(tmp_path / "traces") == {f"p-{i}" for i in range(6)}
     judged = run_judging(tmp_path, RecordingJudge([json.dumps(GOOD)] * 6), workers=3)
     assert judged["judged"] == 6 and len(done_ids(tmp_path / "judged")) == 6
+
+
+def test_a_too_long_trace_is_not_tried_again(tmp_path):
+    from emperor.data.retry import prepare_round
+
+    teacher = ScriptedTeacher([tool_turn("spawn_agent", {"brief": BRIEF, "tier": "standard"})] * 3)
+    config = GenerationConfig(max_sample_tokens=10)
+    sample, reason = generate_trace(record(), teacher, FakeEnv(), config)
+    assert (sample, reason) == (None, "too_long")
+    prompts = tmp_path / "prompts.jsonl"
+    write_prompts(prompts, ["p-0"])
+    counts = run_generation(prompts, tmp_path, teacher, FakeEnv(), config=config)
+    (reject,) = iter_records(tmp_path / "rejects")
+    assert counts["rejected"] == 1 and reject["attempt_failures"] == ["too_long"]
+    assert prepare_round(tmp_path, 1) == 0  # no retry round for a long task either

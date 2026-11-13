@@ -424,8 +424,12 @@ def build_parser(prog: str = "hosted") -> argparse.ArgumentParser:
     parser.add_argument("--threshold", type=float, default=4.0, help="minimum mean judge score")
     parser.add_argument("--workers", type=int, help="parallel tasks (default: the provider's)")
     parser.add_argument("--judge-workers", type=int, help="parallel judgements")
-    parser.add_argument(
+    hours = parser.add_mutually_exclusive_group()
+    hours.add_argument(
         "--offpeak-only", action="store_true", help="send DeepSeek requests only off-peak"
+    )
+    hours.add_argument(
+        "--any-hour", action="store_true", help="ignore offpeak_only in the config (pilots)"
     )
     parser.add_argument(
         "--only", action="append", default=[], help="run just this phase (repeatable)"
@@ -448,10 +452,11 @@ def build_parser(prog: str = "hosted") -> argparse.ArgumentParser:
 
 def configure(args) -> HostedConfig:
     config = load_config(args.root / args.config if not args.config.is_absolute() else args.config)
-    if args.offpeak_only:
-        for provider in config.providers.values():
-            if provider.offpeak_factor < 1.0:
-                provider.offpeak_only = True
+    for provider in config.providers.values():
+        if args.offpeak_only and provider.offpeak_factor < 1.0:
+            provider.offpeak_only = True
+        if args.any_hour:
+            provider.offpeak_only = False
     return config
 
 

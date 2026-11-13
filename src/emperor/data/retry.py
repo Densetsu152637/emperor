@@ -17,6 +17,7 @@ from emperor.data.records import current
 from emperor.data.shards import read_jsonl
 
 DEFAULT_RETRIES = 2
+NO_RETRY_REASONS = frozenset({"too_long"})
 
 
 def round_dir(data_dir: Path, k: int) -> Path:
@@ -63,9 +64,14 @@ def prepare_round(data_dir: Path, k: int) -> int:
     won = set()
     for j in range(k):
         won |= kept_ids(round_dir(data_dir, j))
+    # A prompt whose trace was too long is long by nature (pilots: 30 of 33 extra tries were too
+    # long again); another round would pay for the same rejection.
+    too_long = {
+        i for i, r in current(previous / "rejects").items() if r.get("reason") in NO_RETRY_REASONS
+    }
     lines = []
     for record in read_jsonl(previous / "prompts.jsonl"):
-        if record["id"] in won:
+        if record["id"] in won or record["id"] in too_long:
             continue
         record = {**record, "seed": (record["seed"] + ROUND_SEED_STEP) & SEED_MASK}
         lines.append(json.dumps(record, ensure_ascii=False))

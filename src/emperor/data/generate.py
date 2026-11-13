@@ -64,6 +64,10 @@ class GenerationConfig:
     # version and pilot number (hosted runs).
     provenance: dict = field(default_factory=dict)
     retries: int = 2  # extra tries (new seed) when a trace fails the schema check
+    # Failures not worth paying for again: in hosted pilots 1-3 a too_long trace came back
+    # too_long on 30 of 33 extra tries (the task, not the draw, is long), so the extra tries
+    # cost about eleven traces per sample they rescued.
+    no_retry_reasons: frozenset[str] = frozenset({"too_long"})
     force_first_tool: bool = True  # tool_choice "required" on the first turn
     direct_classes: frozenset[str] = field(default_factory=lambda: DIRECT_CLASSES)
     attempt: int = 0  # which retry round this run belongs to (0 is the first pass)
@@ -139,10 +143,10 @@ Rules:
   snippet, one per line. Content must be realistic and consistent with what is known.
 - web_fetch: return the readable text of the page, 120 to 280 words, with concrete facts.
 - A subagent report (await_tasks): write the report the subagent would send for its brief,
-  following the brief's "Output format", 60 to 180 words (40 to 90 words each when more than
+  following the brief's "Output format", 40 to 120 words (30 to 70 words each when more than
   four reports are asked for at once, as for chunks of one long input), with concrete
-  evidence for each acceptance check. Occasionally (about one time in six) report a genuine problem or a failed
-  check, so the assistant has to re-plan.
+  evidence for each acceptance check. Occasionally (about one time in six) report a genuine
+  problem or a failed check, so the assistant has to re-plan.
 - ask_user: write the user's answers, one line per question, as a normal person would; accept
   the recommended answer about half the time.
 Never include credentials, API keys, tokens or private endpoints in any result.
@@ -548,6 +552,8 @@ def _sample_with_retries(
         if sample:
             return sample, None, failures
         failures.append(reason or "unknown")
+        if reason in config.no_retry_reasons:
+            break
     return None, reason, failures
 
 

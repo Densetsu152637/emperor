@@ -191,7 +191,9 @@ def test_changed_judge_settings_rejudge_pilot_samples_without_the_teacher(tmp_pa
     text = (ROOT / "configs" / "hosted.toml").read_text(encoding="utf-8")
     judge = text.index("[roles.judge]")
     low = tmp_path / "low.toml"
-    low.write_text(text[:judge] + text[judge:].replace('"high"', '"low"', 1), encoding="utf-8")
+    other = text[judge:].replace('reasoning_effort = "low"', 'reasoning_effort = "high"', 1)
+    assert other != text[judge:]
+    low.write_text(text[:judge] + other, encoding="utf-8")
     again = counting_run(tmp_path, monkeypatch, "--pilot", "1", "--limit", "0", config=low)
     assert not task_texts(again["teacher"])  # no teacher tokens
     judged = list(iter_records(tmp_path / "data" / "judged"))
