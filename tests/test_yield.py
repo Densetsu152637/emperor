@@ -13,7 +13,7 @@ from emperor.data.judge import JudgeResult, decide, judge_sample, run_judging
 from emperor.data.prompts import normalise
 from emperor.data.retry import prepare_round, retry_dirs
 from emperor.data.schema import table_rows
-from emperor.data.shards import ShardWriter, iter_records
+from emperor.data.shards import ShardWriter, done_ids, iter_records
 from emperor.data.style import STYLE, judge_system
 from emperor.data.teacher import ChatClient, TeacherError
 from emperor.train.config import load_config, parse_config
@@ -398,3 +398,20 @@ def test_a_context_overflow_is_its_own_reject_reason(monkeypatch, tmp_path):
     )
     (reject,) = iter_records(tmp_path / "rejects")
     assert counts["rejected"] == 1 and reject["reason"] == "context_exceeded"
+
+
+def test_generation_and_judging_run_several_prompts_at_once(tmp_path):
+    prompts = tmp_path / "prompts.jsonl"
+    rows = [json.dumps({**record().to_dict(), "id": f"p-{i}"}) for i in range(6)]
+    prompts.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    class Teacher:
+        def chat(self, messages, *, tools=None, **kwargs):
+            done = sum(1 for m in messages if m["role"] == "tool")
+            script = good_script()
+            return {**script[min(done, 2)], "reasoning_content": "Think."}
+
+    counts = run_generation(prompts, tmp_path, Teacher(), FakeEnv(), workers=3)
+    assert counts["accepted"] == 6 and done_ids(tmp_path / "traces") == {f"p-{i}" for i in range(6)}
+    judged = run_judging(tmp_path, RecordingJudge([json.dumps(GOOD)] * 6), workers=3)
+    assert judged["judged"] == 6 and len(done_ids(tmp_path / "judged")) == 6

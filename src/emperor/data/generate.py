@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from emperor.data.parallel import run_items
 from emperor.data.prompts import PromptRecord
 from emperor.data.schema import LICENCE, MAX_TABLE_ROWS, table_rows, validate_sample
 from emperor.data.shards import ShardWriter, done_ids, read_jsonl
@@ -545,8 +546,10 @@ def run_generation(
     limit: int | None = None,
     should_stop: Callable[[], bool] = lambda: False,
     log: Callable[[str], None] = lambda _: None,
+    workers: int = 1,
 ) -> dict:
     """Generate traces for every prompt not yet done; resumable and safe to stop between samples.
+    `workers` prompts run at once (hosted APIs; a local llama-server takes one at a time).
 
     Accepted samples go to `out_dir/traces`, rejections (with reasons) to `out_dir/rejects`; both
     count as done. Returns counts and whether the run stopped early.
@@ -565,17 +568,12 @@ def run_generation(
             check_teacher_reasoning(teacher, config)
         except TeacherError as error:
             return {**counts, "stopped": True, "error": str(error)}
-    for record in todo:
-        if should_stop():
-            counts["stopped"] = True
-            break
-        try:
-            sample, reason, failures = _sample_with_retries(record, teacher, env_client, config)
-        except TeacherError as error:
-            # The server is gone (paused, crashed): leave the id undone and let the caller retry.
-            counts["stopped"] = True
-            counts["error"] = str(error)
-            break
+
+    def work(record: PromptRecord):
+        return _sample_with_retries(record, teacher, env_client, config)
+
+    def handle(record: PromptRecord, result) -> None:
+        sample, reason, failures = result
         if sample:
             sample["meta"]["attempts"] = len(failures) + 1
             if failures:
@@ -594,4 +592,10 @@ def run_generation(
             )
             counts["rejected"] += 1
         log(f"{record.id} {'ok' if sample else reason}")
+
+    # A TeacherError (server gone, budget reached) leaves the remaining ids undone for a resume.
+    outcome = run_items(todo, work, handle, workers=workers, should_stop=should_stop)
+    counts["stopped"] = outcome["stopped"]
+    if "error" in outcome:
+        counts["error"] = outcome["error"]
     return counts

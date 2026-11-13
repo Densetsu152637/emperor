@@ -8,13 +8,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from emperor.data.generate import Chat
+from emperor.data.parallel import run_items
 from emperor.data.schema import MAX_TABLE_ROWS, count_emojis, table_rows
 from emperor.data.shards import ShardWriter, done_ids, iter_records
 from emperor.data.style import CRITERIA, NOT_APPLICABLE, judge_system
 from emperor.data.teacher import (
     JUDGE_MODEL,
     TeacherContextError,
-    TeacherError,
     TeacherOutputError,
 )
 
@@ -236,39 +236,44 @@ def run_judging(
     model: str = JUDGE_MODEL,
     should_stop: Callable[[], bool] = lambda: False,
     log: Callable[[str], None] = lambda _: None,
+    workers: int = 1,
 ) -> dict:
-    """Judge every trace not yet judged. Resumable; failures to parse are recorded as rejects."""
+    """Judge every trace not yet judged. Resumable; failures to parse are recorded as rejects.
+    `workers` traces are judged at once (hosted judges; a local server takes one at a time)."""
     writer = ShardWriter(data_dir / "judged", "judged")
     finished = done_ids(data_dir / "judged")
     counts = {"judged": 0, "kept": 0, "stopped": False}
-    for sample in iter_records(data_dir / "traces"):
-        if sample["id"] in finished:
-            continue
-        if limit is not None and counts["judged"] >= limit:
-            break
-        if should_stop():
-            counts["stopped"] = True
-            break
+    todo = [s for s in iter_records(data_dir / "traces") if s["id"] not in finished]
+    if limit is not None:
+        todo = todo[:limit]
+
+    def work(sample: dict) -> tuple[dict, bool]:
         try:
             result = judge_sample(sample, client, seed=sample["meta"]["seed"])
             keep, reasons = decide(result, threshold)
-            judge = {**result.to_dict(), "model": model, "keep": keep, "rejection": reasons}
+            return {**result.to_dict(), "model": model, "keep": keep, "rejection": reasons}, keep
         except TeacherContextError as error:
-            judge = {"keep": False, "rejection": ["judge_context_exceeded"], "reason": str(error)}
-            keep = False
+            return {
+                "keep": False,
+                "rejection": ["judge_context_exceeded"],
+                "reason": str(error),
+            }, False
         except TeacherOutputError as error:
-            judge = {"keep": False, "rejection": ["judge_unparseable"], "reason": str(error)}
-            keep = False
-        except TeacherError as error:
-            counts["stopped"] = True
-            counts["error"] = str(error)
-            break
+            return {"keep": False, "rejection": ["judge_unparseable"], "reason": str(error)}, False
         except JudgeParseError as error:
-            judge = {"keep": False, "rejection": ["judge_unparseable"], "reason": str(error)}
-            keep = False
+            return {"keep": False, "rejection": ["judge_unparseable"], "reason": str(error)}, False
+
+    def handle(sample: dict, result: tuple[dict, bool]) -> None:
+        judge, keep = result
         sample["meta"]["judge"] = judge
         writer.write(sample)
         counts["judged"] += 1
         counts["kept"] += int(keep)
         log(f"{sample['id']} {'keep' if keep else ','.join(judge['rejection'])}")
+
+    # A TeacherError (server gone, budget reached) stops the phase; unjudged ids stay to do.
+    outcome = run_items(todo, work, handle, workers=workers, should_stop=should_stop)
+    counts["stopped"] = outcome["stopped"]
+    if "error" in outcome:
+        counts["error"] = outcome["error"]
     return counts
