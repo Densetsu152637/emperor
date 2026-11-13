@@ -39,8 +39,48 @@ uv sync --group data --group train   # optional: data generation and training (m
 
 ## Dataset, training and pipeline
 
-Everything here runs on this machine. No Claude, Anthropic or OpenAI API is used to generate or
-judge data; the teacher is a local model and the client refuses any non-loopback endpoint.
+The data can be made two ways. **Hosted** (the default for new data, below): the teacher and
+the tool simulator run on DeepSeek's API and the judge on Moonshot's (Kimi). **Local** (the
+fallback, the `pipeline` command): a local gpt-oss teacher and Qwen judge behind llama-server,
+gated on idleness; its client refuses any non-loopback endpoint. No Claude, Anthropic or OpenAI
+API is used to generate or judge data either way. Training always runs on this machine.
+
+### Hosted data (`uv run hosted`)
+
+- **Teacher**: `deepseek-v4-pro` in thinking mode (`reasoning_effort` high); its
+  `reasoning_content` is stored on every assistant turn and the first turn must have it.
+  DeepSeek's terms (Open Platform Terms of Service, section 4.2) assign the outputs to the user
+  and list "training other models (such as model distillation)" among the permitted uses.
+- **Tool simulator**: `deepseek-flash` without thinking (its output is context, never trained).
+- **Judge**: `kimi-k3.1-pro` (always thinks; a different family from the teacher). It sees
+  the transcript without the teacher's reasoning. Thresholds and rubric are the local ones.
+- **Keys**: stored in the OS credential store and read with `keyring` at run time (service
+  `emperor`, usernames `deepseek` and `moonshot`); never in files, logs or the command line:
+
+  ```powershell
+  uv run python -c "import keyring, getpass; keyring.set_password('emperor', 'deepseek', getpass.getpass())"
+  ```
+
+- **Config**: `configs/hosted.toml` holds the base URLs, model ids, per-role thinking and token
+  budgets, concurrency, the price per million tokens (with the source page) and a hard budget
+  per provider. `--offpeak-only` (or `offpeak_only = true`) sends DeepSeek requests only in its
+  half-price hours (outside 01:00-04:00 and 06:00-10:00 UTC on weekdays).
+
+```powershell
+uv run hosted --data-dir data/hosted-1 --run-dir runs/hosted-1 --detach   # start or resume
+Get-Content runs/hosted-1/status.json                                      # progress and spend
+New-Item runs/hosted-1/STOP                                                 # stop cleanly
+```
+
+Phases: prompts, generate, judge, retry rounds, filter, report (`--only <phase>` runs one).
+Requests run in parallel (`--workers`, `--judge-workers`; default the provider's
+`max_concurrency`), back off on 429 and 5xx, and resume from the shards on disk. Every
+request's usage (cache hits and misses, reasoning tokens) and estimated cost is appended to
+`<data-dir>/spend.jsonl`; `status.json` shows spend per provider, dollars per task and the
+projected cost of the main pass. A provider that reaches its budget stops the run with status
+`budget` (exit code 3); raise `budget_usd` and run the same command to resume.
+
+### Local pipeline (`uv run pipeline`)
 
 ```powershell
 # Start the whole build in the background (writes runs/<timestamp>/ and returns at once).

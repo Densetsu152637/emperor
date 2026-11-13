@@ -377,9 +377,9 @@ def check_teacher_reasoning(teacher: Chat, config: "GenerationConfig") -> None:
         if not reasoning_of(reply):
             raise TeacherSetupError(
                 f"the teacher returned no reasoning_content ({label}); a thinking student "
-                "cannot be trained on its traces. Check that llama-server runs with --jinja and "
-                "extracts reasoning (not --reasoning-format none) and that the reasoning effort "
-                "is set"
+                "cannot be trained on its traces. Local: check that llama-server runs with "
+                "--jinja and extracts reasoning (not --reasoning-format none) and that the "
+                "reasoning effort is set. Hosted: check that the teacher role enables thinking"
             )
 
 

@@ -108,7 +108,39 @@ in `data/`; the dataset goes to a private Hugging Face repository (`<org>/empero
    vendored schemas, 0 secret-pattern hits, and clean dedup and held-out overlap checks.
 5. **Datasheet.** List every source with its licence and provider terms.
 
-### Full run: both datasets first, then training
+### Full run on hosted models (the default)
+
+Teacher and simulator on DeepSeek, judge on Kimi (`configs/hosted.toml`); nothing runs on the
+GPU, so the idle gate does not apply. Training still waits for an idle machine.
+
+1. Check the keys exist (prints only present or missing):
+
+   ```powershell
+   uv run python -c "import keyring; [print(u, bool(keyring.get_password('emperor', u))) for u in ('deepseek', 'moonshot')]"
+   ```
+
+2. Check the rates and budgets in `configs/hosted.toml` against the provider pages it cites,
+   and set `budget_usd` per provider to what the account may spend on this run.
+3. Emperor's data, from the emperor checkout (`--offpeak-only` halves DeepSeek's price and
+   stretches the run over the off-peak hours):
+
+   ```powershell
+   uv run hosted --data-dir data/hosted-1 --run-dir runs/hosted-1 --detach
+   ```
+
+4. Consul's data, from the consul checkout, the same command. The two use different accounts'
+   rate limits only through the shared keys, so they may run together; run them one after the
+   other when the budget is tight.
+5. Watch `runs/hosted-1/status.json` (spend per provider, dollars per task, projection). On
+   status `budget`, raise `budget_usd` and run the same command to resume; `New-Item
+   runs/hosted-1/STOP` stops cleanly.
+6. Train each model locally, one at a time, on the hosted data: set `[data] path =
+   "data/hosted-1/final/final.jsonl"` in `configs/sft.toml`, then run the local pipeline's
+   filter (it records the kept count the train phase checks) and training phases:
+   `uv run --group data --group train pipeline --detach --data-dir data/hosted-1 --only filter
+   --only train --only merge --only export --only eval --only card`.
+
+### Full run on local models (fallback): both datasets first, then training
 
 Generate and judge both models' data before any training. Only one model may run at a time
 (teacher, judge, training or eval), and both pipelines serve on port 8081, so **never run two
