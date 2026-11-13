@@ -174,3 +174,12 @@ def test_a_thinking_judge_is_parsed_from_its_answer_and_named_in_the_verdict(tmp
     (judged,) = iter_records(tmp_path / "judged")
     assert judged["meta"]["judge"]["keep"] is True
     assert judged["meta"]["judge"]["model"] == "Qwen3.8-27B"
+
+
+def test_the_judge_never_sees_the_teachers_reasoning(sample):
+    from emperor.data.judge import render_transcript
+
+    for message in sample["messages"]:
+        if message["role"] == "assistant":
+            message["reasoning_content"] = "SECRET-CHAIN-OF-THOUGHT"
+    assert "SECRET-CHAIN-OF-THOUGHT" not in render_transcript(sample)

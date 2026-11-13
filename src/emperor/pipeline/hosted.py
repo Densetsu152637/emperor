@@ -85,6 +85,9 @@ class HostedRun:
     name = "emperor"
     phases = ("prompts", "generate", "judge", "retry", "filter", "report")
     host = "DeepSeek API"
+    # DeepSeek Open Platform Terms of Service 4.2: outputs are assigned to the user, who may
+    # use them for "training other models (such as model distillation)".
+    licence = "DeepSeek Open Platform Terms of Service 4.2"
 
     def __init__(self, args, config: HostedConfig):
         self.args = args
@@ -218,6 +221,7 @@ class HostedRun:
             force_first_tool=True,
             teacher_model=self.names.get("teacher", role.model),
             host=self.host,
+            licence=self.licence,
             attempt=attempt,
         )
 

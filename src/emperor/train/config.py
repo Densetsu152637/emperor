@@ -103,14 +103,18 @@ class ReleaseConfig:
             "Trained on synthetic data from one teacher model; coverage outside it is untested.",
         ]
     )
-    teacher: str = "gpt-oss-120b"
-    teacher_licence: str = "Apache-2.0"
+    # Used only when the dataset report does not name them (the card reads the served models
+    # from the samples).
+    teacher: str = "deepseek-v4-pro"
+    teacher_licence: str = "DeepSeek Open Platform Terms of Service"
     teacher_policy: str = (
-        "gpt-oss is used under its Apache-2.0 licence and OpenAI's gpt-oss usage policy "
-        "(https://github.com/openai/gpt-oss/blob/main/USAGE_POLICY)."
+        "DeepSeek's outputs are used under section 4.2 of the DeepSeek Open Platform Terms of "
+        'Service, which assigns the outputs to the user and lists "training other models (such '
+        'as model distillation)" among the permitted uses '
+        "(https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html)."
     )
     judge: str = (
-        "Qwen3.8-27B (local, a different model family from the teacher; scored 1-5 on "
+        "kimi-k3.1-pro (Moonshot API, a different model family from the teacher; scored 1-5 on "
         "eight criteria with a pass or fail)"
     )
     filters: list[str] = field(

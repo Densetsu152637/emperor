@@ -174,8 +174,9 @@ def test_card_renders_every_section_from_a_sample_report():
     assert "| tool_validity | G1 | 40 | 0.975 | 0.98 | no |" in text
     assert "| retrieval | G6 | 0 | n/a | n/a | n/a |" in text
     assert "r=32, alpha=64" in text and "Final training loss: 0.4321" in text
-    assert "Teacher: gpt-oss-120b (Apache-2.0)" in text and "Judge pass rate: 70.6%" in text
-    assert "gpt-oss usage policy" in text and "Judge: Qwen3.8-27B" in text
+    assert "Teacher: deepseek-v4-pro (DeepSeek Open Platform Terms of Service)" in text
+    assert "Judge pass rate: 70.6%" in text and "model distillation" in text
+    assert "Judge: kimi-k3.1-pro" in text
     assert "coding 700, planning 500" in text
     assert "## Memory and context" in text and "| bf16 | 8.0 |" in text
     assert "dry run" not in text
@@ -370,3 +371,28 @@ def test_a_merged_model_without_its_mtp_head_converts_without_it(tmp_path):
     assert converter_flags(tmp_path) == []
     (tmp_path / "config.json").write_text(json.dumps({"num_hidden_layers": 36}))
     assert converter_flags(tmp_path) == []
+
+
+def test_card_names_the_models_the_samples_record():
+    report = {
+        **DATA_REPORT,
+        "teachers": {"deepseek-v4-pro": 1900, "deepseek-v4-pro-0813": 100},
+        "judges": {"kimi-k3.1-pro": 2000},
+        "hosts": {"DeepSeek API": 2000},
+        "licences": {"DeepSeek Open Platform Terms of Service 4.2": 2000},
+    }
+    text = card.datasheet(parse_config({}).release, report)
+    assert (
+        "Teacher: deepseek-v4-pro (1900), deepseek-v4-pro-0813 (100), served by DeepSeek API"
+        in text
+    )
+    assert "Judge: kimi-k3.1-pro (2000)" in text
+    assert "No hosted API" not in text
+    local = {
+        **DATA_REPORT,
+        "teachers": {"gpt-oss-120b-F16": 5},
+        "hosts": {"local llama.cpp": 5},
+        "judges": {"Qwen3.8-27B-UD-Q4_K_XL": 5},
+        "licences": {"Apache-2.0": 5},
+    }
+    assert "No hosted API produced" in card.datasheet(parse_config({}).release, local)

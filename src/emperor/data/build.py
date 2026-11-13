@@ -37,6 +37,29 @@ def filter_kept(data_dir: Path) -> dict:
     return {"kept": kept, "dropped": dropped, "path": str(target)}
 
 
+def provenance(samples: list[dict]) -> dict:
+    """Which teacher, judge, host and terms produced the samples, with counts."""
+    teachers, judges, hosts, licences = Counter(), Counter(), Counter(), Counter()
+    seen = set()
+    for sample in samples:
+        meta = sample.get("meta", {})
+        if sample.get("id") not in seen:
+            seen.add(sample.get("id"))
+            teachers[meta.get("teacher", "unknown")] += 1
+            hosts[meta.get("host", "unknown")] += 1
+            licences[meta.get("licence", "unknown")] += 1
+        if meta.get("judge", {}).get("model"):
+            judges[meta["judge"]["model"]] += 1
+    top = teachers.most_common(1)
+    return {
+        "teacher": top[0][0] if top else None,
+        "teachers": dict(teachers.most_common()),
+        "judges": dict(judges.most_common()),
+        "hosts": dict(hosts.most_common()),
+        "licences": dict(licences.most_common()),
+    }
+
+
 def build_report(data_dir: Path) -> dict:
     """Counts, pass rate, score histograms and rejection reasons across every stage."""
     prompts = 0
@@ -87,8 +110,8 @@ def build_report(data_dir: Path) -> dict:
         "judge_rejection_reasons": dict(rejection.most_common()),
         "retry_rounds": retries,
         "kept_with_retries": kept_total,
-        "teacher": "gpt-oss-20b",
-        "licence": "Apache-2.0",
+        # Read from the samples, so the card names the models that actually served.
+        **provenance([*traces, *judged]),
         "shards": {
             stage: len(shard_files(data_dir / stage))
             for stage in ("traces", "rejects", "judged", "final")
