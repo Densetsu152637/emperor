@@ -430,7 +430,12 @@ class HostedRun:
                 log.info("phase %s: %s", name, result)
                 if stopped:
                     error = str(result.get("error", ""))
-                    outcome = "budget" if "cap" in error or "402" in error else "stopped"
+                    if "cap" in error or "402" in error:
+                        outcome = "budget"
+                    elif error:  # a setup error: not done, and the run says so (exit 1)
+                        outcome = "error"
+                    else:
+                        outcome = "stopped"
                     break
         finally:
             stop.set()

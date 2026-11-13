@@ -64,3 +64,22 @@ def run_items[T, R](
             while len(running) < workers and submit():
                 pass
     return outcome
+
+
+class Streak:
+    """Counts bad results in a row; `tripped` once `limit` came one after another. A run of
+    the same HTTP failure means the setup is wrong (a retired model), not the samples."""
+
+    def __init__(self, limit: int = 20):
+        self.limit = limit
+        self.count = 0
+
+    def add(self, bad: bool) -> None:
+        self.count = self.count + 1 if bad else 0
+
+    @property
+    def tripped(self) -> bool:
+        return self.count >= self.limit
+
+    def error(self, what: str) -> str:
+        return f"{self.count} {what} in a row: the setup, not the samples, is failing"

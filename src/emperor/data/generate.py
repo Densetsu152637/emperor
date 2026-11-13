@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from emperor.data.parallel import run_items
+from emperor.data.parallel import Streak, run_items
 from emperor.data.prompts import PromptRecord
 from emperor.data.records import current
 from emperor.data.schema import LICENCE, MAX_TABLE_ROWS, table_rows, validate_sample
@@ -611,8 +611,11 @@ def run_generation(
     def work(record: PromptRecord):
         return _sample_with_retries(record, teacher, env_client, config)
 
+    streak = Streak()
+
     def handle(record: PromptRecord, result) -> None:
         sample, reason, failures = result
+        streak.add(reason == "teacher_output_unparsable")
         if sample:
             sample["meta"]["attempts"] = len(failures) + 1
             if failures:
@@ -635,8 +638,12 @@ def run_generation(
         log(f"{record.id} {'ok' if sample else reason}")
 
     # A TeacherError (server gone, budget reached) leaves the remaining ids undone for a resume.
-    outcome = run_items(todo, work, handle, workers=workers, should_stop=should_stop)
+    outcome = run_items(
+        todo, work, handle, workers=workers, should_stop=lambda: should_stop() or streak.tripped
+    )
     counts["stopped"] = outcome["stopped"]
     if "error" in outcome:
         counts["error"] = outcome["error"]
+    elif streak.tripped:
+        counts["error"] = streak.error("teacher_output_unparsable rejects")
     return counts

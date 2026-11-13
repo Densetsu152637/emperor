@@ -8,7 +8,12 @@ from conftest import BRIEF, make_sample
 from test_data_generate import FakeEnv, ScriptedTeacher, good_script, record, tool_turn
 
 from emperor.data.build import build_report, filter_kept
-from emperor.data.generate import GenerationConfig, generate_trace, run_generation
+from emperor.data.generate import (
+    _PREFLIGHT_USER,
+    GenerationConfig,
+    generate_trace,
+    run_generation,
+)
 from emperor.data.judge import JudgeResult, decide, judge_sample, run_judging
 from emperor.data.prompts import normalise
 from emperor.data.retry import prepare_round, retry_dirs
@@ -457,3 +462,21 @@ def test_each_verdict_records_the_model_that_gave_it(tmp_path):
     run_judging(tmp_path, judge, model="kimi-k3.1-pro")
     (judged,) = iter_records(tmp_path / "judged")
     assert judged["meta"]["judge"]["model"] == "kimi-k3.1-pro-highspeed"
+
+
+def test_twenty_unparsable_rejects_in_a_row_stop_the_phase(tmp_path):
+    from emperor.data.teacher import TeacherOutputError
+
+    prompts = tmp_path / "prompts.jsonl"
+    write_prompts(prompts, [f"p-{i}" for i in range(30)])
+
+    class Broken:
+        def chat(self, messages, **kwargs):
+            if messages[-1].get("content") == _PREFLIGHT_USER:
+                return {"content": "", "tool_calls": [], "reasoning_content": "ok"}
+            raise TeacherOutputError("HTTP 400: Content Exists Risk")
+
+    counts = run_generation(
+        prompts, tmp_path, Broken(), FakeEnv(), config=GenerationConfig(retries=0)
+    )
+    assert counts["stopped"] and counts["rejected"] == 20 and "in a row" in counts["error"]

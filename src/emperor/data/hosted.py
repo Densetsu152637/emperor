@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import random
+import re
 import threading
 import time
 import tomllib
@@ -48,6 +49,14 @@ from emperor.data.teacher import (
 
 DEFAULT_CONFIG = Path("configs/hosted.toml")
 RETRY_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 529}
+# 400s that belong to one request's content, not to the setup: the sample is rejected and the
+# run goes on (DeepSeek "Content Exists Risk", Kimi content filtering).
+_SAMPLE_ERROR = re.compile(
+    r"content.{0,20}risk|content_filter|content filter|risk control|sensitive|inappropriate",
+    re.IGNORECASE,
+)
+# A run of these in a row means the setup, not the samples, is wrong: the phase stops.
+MAX_CONSECUTIVE_HTTP_REJECTS = 20
 
 
 class BudgetExceeded(TeacherError):
@@ -483,7 +492,12 @@ class HostedClient:
                 )
             if _CONTEXT_ERROR.search(text):
                 raise TeacherContextError(f"{self.provider.name}: {text[:300]}")
-            raise TeacherOutputError(f"{self.provider.name}: HTTP {status}: {text[:300]}")
+            if status in (400, 422) and _SAMPLE_ERROR.search(text):
+                # A cause that belongs to this one request (its content): reject the sample.
+                raise TeacherOutputError(f"{self.provider.name}: HTTP {status}: {text[:300]}")
+            # Anything else (a retired or renamed model, a bad parameter) would reject every
+            # remaining task the same way: stop the phase and leave the ids to do.
+            raise TeacherError(f"{self.provider.name}: HTTP {status} ({model}): {text[:300]}")
         raise TeacherError(
             f"{self.provider.name}: no answer after {self.provider.max_retries} tries ({last})"
         )

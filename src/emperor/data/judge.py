@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from emperor.data.generate import Chat
-from emperor.data.parallel import run_items
+from emperor.data.parallel import Streak, run_items
 from emperor.data.records import current, fingerprint
 from emperor.data.schema import MAX_TABLE_ROWS, count_emojis, table_rows
 from emperor.data.shards import ShardWriter
@@ -278,8 +278,11 @@ def run_judging(
         except JudgeParseError as error:
             return {"keep": False, "rejection": ["judge_unparseable"], "reason": str(error)}, False
 
+    streak = Streak()
+
     def handle(sample: dict, result: tuple[dict, bool]) -> None:
         judge, keep = result
+        streak.add(bool(set(judge.get("rejection") or []) & {"judge_unparseable"}))
         sample["meta"]["judge"] = judge
         writer.write(sample)
         counts["judged"] += 1
@@ -287,8 +290,12 @@ def run_judging(
         log(f"{sample['id']} {'keep' if keep else ','.join(judge['rejection'])}")
 
     # A TeacherError (server gone, budget reached) stops the phase; unjudged ids stay to do.
-    outcome = run_items(todo, work, handle, workers=workers, should_stop=should_stop)
+    outcome = run_items(
+        todo, work, handle, workers=workers, should_stop=lambda: should_stop() or streak.tripped
+    )
     counts["stopped"] = outcome["stopped"]
     if "error" in outcome:
         counts["error"] = outcome["error"]
+    elif streak.tripped:
+        counts["error"] = streak.error("judge_unparseable verdicts")
     return counts

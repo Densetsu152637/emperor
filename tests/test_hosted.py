@@ -193,7 +193,9 @@ def test_rate_limits_and_server_errors_are_retried_with_backoff():
 def test_client_errors_are_classified_without_retrying():
     for status, text, kind in (
         (400, "This model's maximum context length is 1048576 tokens", TeacherContextError),
-        (400, "invalid tool schema", TeacherOutputError),
+        (400, "invalid tool schema", TeacherError),  # the setup: stops the phase
+        (404, "model not found", TeacherError),
+        (400, "Content Exists Risk", TeacherOutputError),  # this sample only
         (401, "bad key", TeacherSetupError),
         (402, "Insufficient Balance", BudgetExceeded),
     ):
@@ -216,7 +218,7 @@ def test_offpeak_only_waits_for_the_cheap_hours():
 def test_the_key_never_appears_in_errors_logs_or_repr(tmp_path):
     ledger = Ledger(tmp_path / "spend.jsonl")
     made, _ = client("teacher", [Response(400, text="bad request"), ok()], ledger=ledger)
-    with pytest.raises(TeacherOutputError) as error:
+    with pytest.raises(TeacherError) as error:
         made.chat([{"role": "user", "content": "x"}])
     made.chat([{"role": "user", "content": "x"}])
     assert KEY not in str(error.value) and KEY not in repr(made)
