@@ -58,7 +58,7 @@ class Http:
         self.posts = []
 
     def post(self, url, json, headers):
-        self.posts.append({"url": url, "json": json, "headers": headers})
+        self.posts.append({"url": url, "json": dict(json), "headers": headers})
         return self.responses.pop(0)
 
     def close(self):
@@ -347,3 +347,31 @@ def test_a_peak_request_waits_and_reports_when_it_resumes():
     teacher.chat([{"role": "user", "content": "x"}])
     assert seen and all(t == PEAK.replace(hour=4) for t in seen)
     assert teacher.waiting_until is None
+
+
+def test_an_overloaded_judge_falls_back_for_a_cool_down_then_tries_the_primary(tmp_path):
+    overloaded = Response(
+        429, text='{"error":{"type":"engine_overloaded_error","message":"overloaded"}}'
+    )
+    ledger = Ledger(tmp_path / "spend.jsonl")
+    judge, http = client(
+        "judge",
+        [overloaded, overloaded, overloaded, ok(model="kimi-k3.1-pro-highspeed"),
+         ok(model="kimi-k3.1-pro-highspeed"), ok(model="kimi-k3.1-pro")],
+        ledger=ledger,
+    )  # fmt: skip
+    now = [0.0]
+    judge._monotonic = lambda: now[0]
+    judge.chat([{"role": "user", "content": "x"}])
+    models = [p["json"]["model"] for p in http.posts]
+    assert models == ["kimi-k3.1-pro"] * 3 + ["kimi-k3.1-pro-highspeed"]
+    assert judge.last_model == "kimi-k3.1-pro-highspeed"
+    judge.chat([{"role": "user", "content": "x"}])  # still cooling down
+    assert http.posts[-1]["json"]["model"] == "kimi-k3.1-pro-highspeed"
+    now[0] = 901.0
+    judge.chat([{"role": "user", "content": "x"}])  # the primary again
+    assert http.posts[-1]["json"]["model"] == "kimi-k3.1-pro"
+    rows = [json.loads(line) for line in (tmp_path / "spend.jsonl").read_text().splitlines()]
+    assert [r["model"] for r in rows] == [
+        "kimi-k3.1-pro-highspeed", "kimi-k3.1-pro-highspeed", "kimi-k3.1-pro"
+    ]  # fmt: skip

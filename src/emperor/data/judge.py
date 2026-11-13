@@ -261,7 +261,9 @@ def run_judging(
         try:
             result = judge_sample(sample, client, seed=sample["meta"]["seed"])
             keep, reasons = decide(result, threshold)
-            verdict = {**result.to_dict(), "model": model, "keep": keep, "rejection": reasons}
+            # The model that actually answered (a fallback during an overload), else the name.
+            actual = getattr(client, "last_model", None) or model
+            verdict = {**result.to_dict(), "model": actual, "keep": keep, "rejection": reasons}
             if stamp:
                 verdict["settings"] = stamp
             return verdict, keep

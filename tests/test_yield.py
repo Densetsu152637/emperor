@@ -448,3 +448,12 @@ def test_a_higher_length_limit_tries_earlier_too_long_tasks_again(tmp_path):
         prompts, tmp_path, ScriptedTeacher(good_script()), FakeEnv(), config=longer
     )
     assert counts["todo"] == 1 and counts["accepted"] == 1
+
+
+def test_each_verdict_records_the_model_that_gave_it(tmp_path):
+    ShardWriter(tmp_path / "traces", "traces").write(make_sample("p-1"))
+    judge = RecordingJudge([json.dumps(GOOD)])
+    judge.last_model = "kimi-k3.1-pro-highspeed"
+    run_judging(tmp_path, judge, model="kimi-k3.1-pro")
+    (judged,) = iter_records(tmp_path / "judged")
+    assert judged["meta"]["judge"]["model"] == "kimi-k3.1-pro-highspeed"

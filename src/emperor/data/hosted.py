@@ -26,6 +26,7 @@ Provider behaviour that shapes the requests (checked against the official docs o
 from __future__ import annotations
 
 import json
+import logging
 import os
 import random
 import threading
@@ -118,6 +119,11 @@ class Role:
     thinking: bool | None = None  # None: do not send the field
     reasoning_effort: str | None = None
     max_tokens: int | None = None  # overrides the caller's budget (thinking needs room)
+    # Models of the same family tried, in order, while the one before is overloaded, each for
+    # `fallback_cooldown_seconds` before the primary is tried again.
+    fallback_models: list[str] = field(default_factory=list)
+    overload_tries: int = 3  # quick retries of an overloaded model before falling back
+    fallback_cooldown_seconds: float = 900.0
 
 
 @dataclass
@@ -145,8 +151,9 @@ def load_config(path: Path = DEFAULT_CONFIG) -> HostedConfig:
     for role in roles.values():
         if role.provider not in providers:
             raise ValueError(f"role {role.name}: unknown provider {role.provider}")
-        if role.model not in providers[role.provider].rates:
-            raise ValueError(f"role {role.name}: no rates for {role.model} in {role.provider}")
+        for model in (role.model, *role.fallback_models):
+            if model not in providers[role.provider].rates:
+                raise ValueError(f"role {role.name}: no rates for {model} in {role.provider}")
     return HostedConfig(
         providers=providers,
         roles=roles,
@@ -339,6 +346,10 @@ class HostedClient:
         self.base_url = provider.base_url.rstrip("/")
         self.template_kwargs = {"enable_thinking": bool(role.thinking or role.reasoning_effort)}
         self.served_model: str | None = None
+        self._local = threading.local()  # the model that answered this thread's last request
+        self._fallback_until = 0.0  # monotonic time until which the primary is skipped
+        self._fallback_index = 0
+        self._monotonic = time.monotonic
         self.waiting_until: datetime | None = None  # set while held back for off-peak hours
         self._sleep = sleep
         self._clock = clock
@@ -422,9 +433,12 @@ class HostedClient:
         )
         url = f"{self.base_url}/chat/completions"
         last = "no attempt"
+        overloaded = 0
         for attempt in range(self.provider.max_retries):
             self.ledger.check(self.provider.name)
             self._wait_for_offpeak()
+            model = self.current_model()
+            body["model"] = model
             sent = self._clock()
             try:
                 response = self._http.post(url, json=body, headers=self._headers)
@@ -440,11 +454,23 @@ class HostedClient:
                 except (ValueError, KeyError, IndexError, TypeError) as error:
                     raise TeacherOutputError(f"{self.provider.name}: bad response body") from error
                 tokens = usage_tokens(data.get("usage") or {})
-                usd = request_cost(self.provider, self.role.model, tokens, sent)
-                self.ledger.record(self.provider.name, self.role.name, self.role.model, tokens, usd)
+                usd = request_cost(self.provider, model, tokens, sent)
+                self.ledger.record(self.provider.name, self.role.name, model, tokens, usd)
                 self.served_model = data.get("model") or self.served_model
+                self._local.model = data.get("model") or model
                 return message
             text = _safe_text(response)
+            if status == 429 and "overloaded" in text and self.role.fallback_models:
+                # The provider's capacity, not our quota: a few quick tries, then the next
+                # model of the family for a cool-down, then the primary again.
+                overloaded += 1
+                last = f"HTTP 429 overloaded ({model})"
+                if overloaded >= self.role.overload_tries:
+                    self.fall_back()
+                    overloaded = 0
+                    continue
+                self._sleep(self._backoff(attempt, _retry_after(response)))
+                continue
             if status in RETRY_STATUS:
                 last = f"HTTP {status}"
                 self._sleep(self._backoff(attempt, _retry_after(response)))
@@ -460,6 +486,29 @@ class HostedClient:
             raise TeacherOutputError(f"{self.provider.name}: HTTP {status}: {text[:300]}")
         raise TeacherError(
             f"{self.provider.name}: no answer after {self.provider.max_retries} tries ({last})"
+        )
+
+    @property
+    def last_model(self) -> str | None:
+        """The model that answered the calling thread's last request (fallbacks included)."""
+        return getattr(self._local, "model", None)
+
+    def current_model(self) -> str:
+        chain = [self.role.model, *self.role.fallback_models]
+        if self._fallback_index and self._monotonic() >= self._fallback_until:
+            self._fallback_index = 0  # the cool-down is over: try the primary again
+        return chain[self._fallback_index]
+
+    def fall_back(self) -> None:
+        chain = [self.role.model, *self.role.fallback_models]
+        self._fallback_index = (self._fallback_index + 1) % len(chain)
+        self._fallback_until = self._monotonic() + self.role.fallback_cooldown_seconds
+        logging.getLogger("emperor.hosted").warning(
+            "%s: %s overloaded; using %s for %ds",
+            self.provider.name,
+            chain[self._fallback_index - 1],
+            chain[self._fallback_index],
+            self.role.fallback_cooldown_seconds,
         )
 
     @staticmethod
