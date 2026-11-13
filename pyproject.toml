@@ -12,6 +12,7 @@ eval = "emperor.dispatch:eval_main"
 data = "emperor.dispatch:data_main"
 train = "emperor.train.cli:main"
 pipeline = "emperor.dispatch:pipeline_main"
+hosted = "emperor.dispatch:hosted_main"
 release = "emperor.release.cli:main"
 
 [dependency-groups]

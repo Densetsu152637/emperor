@@ -54,6 +54,7 @@ class GenerationConfig:
     temperature: float = 0.7
     max_tokens: int = 4096
     teacher_model: str = TEACHER_MODEL
+    host: str = "local llama.cpp"  # where the teacher ran, recorded with every sample
     retries: int = 2  # extra tries (new seed) when a trace fails the schema check
     force_first_tool: bool = True  # tool_choice "required" on the first turn
     direct_classes: frozenset[str] = field(default_factory=lambda: DIRECT_CLASSES)
@@ -503,7 +504,7 @@ def generate_trace(
             "teacher": config.teacher_model,
             "licence": LICENCE,
             "seed": base_seed,
-            "host": "local llama.cpp",
+            "host": config.host,
             "attempt": config.attempt,
         },
     }
